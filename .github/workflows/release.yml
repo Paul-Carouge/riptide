@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.98"
+  ASSET_NAME: riptide-x86_64-linux
+
+jobs:
+  release:
+    # The oldest supported runner gives the oldest glibc, so the binary also runs on
+    # older distributions as well as Arch/CachyOS.
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The app compares its own version with the tag: a mismatch would offer the same update forever.
+      - name: Check the tag matches Cargo.toml
+        run: |
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          if [ "v$cargo_version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_version"
+            exit 1
+          fi
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+
+      - name: Package and checksum
+        run: |
+          mkdir dist
+          cp target/x86_64-unknown-linux-gnu/release/riptide "dist/$ASSET_NAME"
+          cd dist
+          sha256sum "$ASSET_NAME" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Riptide ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --verify-tag \
+            "dist/$ASSET_NAME" dist/SHA256SUMS
