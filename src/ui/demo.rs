@@ -24,10 +24,11 @@ const DEMO_HISTORY_TIMESTAMP: u64 = 1_794_571_200;
 /// Tracks in the `RIPTIDE_DEMO=big` playlist (virtualized list stress test).
 const BIG_PLAYLIST_TRACK_COUNT: usize = 1500;
 
-/// Debug builds only. `RIPTIDE_DEMO=1` full scene; `=empty` no preview and empty queue;
-/// `=history` opens the history tab; `=big` a 1500-track playlist, all queued.
+/// Debug builds (or the `test-hooks` feature) only. `RIPTIDE_DEMO=1` full scene; `=empty` no
+/// preview and empty queue; `=history` opens the history tab; `=big` a 1500-track playlist, all
+/// queued.
 pub fn is_demo_enabled() -> bool {
-    cfg!(debug_assertions)
+    cfg!(any(debug_assertions, feature = "test-hooks"))
         && std::env::var_os(DEMO_ENVIRONMENT_VARIABLE).is_some_and(|value| value != "0")
 }
 

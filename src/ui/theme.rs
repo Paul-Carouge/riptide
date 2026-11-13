@@ -256,6 +256,12 @@ pub const CARD_ENTER_OFFSET: Pixels = px(28.);
 pub const PREVIEW_UNFOLD_DURATION: Duration = Duration::from_millis(560);
 pub const PREVIEW_UNFOLD_OFFSET: Pixels = px(-14.);
 pub const LOADING_PULSE_DURATION: Duration = Duration::from_millis(1400);
+/// Opacity range of the looping pulses (tools preparation dot, converting groove).
+pub const TOOLS_PULSE_OPACITY: (f32, f32) = (0.25, 1.0);
+pub const CONVERTING_PULSE_OPACITY: (f32, f32) = (0.45, 1.0);
+/// Cadence of continuous animations (spinning discs, progress catch-up, pulses): ~30 fps
+/// is smooth for a slow 33⅓ rpm turn and costs half of a 60 Hz redraw.
+pub const ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 pub const ERROR_SHAKE_DURATION: Duration = Duration::from_millis(380);
 pub const ERROR_SHAKE_AMPLITUDE: Pixels = px(6.);
 /// Damped spring used by entrance animations (natural frequency in Hz, damping ratio).

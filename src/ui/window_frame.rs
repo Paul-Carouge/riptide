@@ -34,18 +34,16 @@ pub fn client_frame(content: impl IntoElement, window: &mut Window) -> AnyElemen
         .child(
             canvas(
                 |_bounds, window, _cx| {
-                    window.insert_hitbox(
-                        Bounds::new(
-                            point(px(0.), px(0.)),
-                            window.window_bounds().get_bounds().size,
-                        ),
-                        HitboxBehavior::Normal,
-                    )
-                },
-                |_bounds, hitbox, window, _cx| {
                     let size = window.window_bounds().get_bounds().size;
-                    if let Some(edge) = resize_edge(window.mouse_position(), size) {
-                        window.set_cursor_style(cursor_for_edge(edge), &hitbox);
+                    RESIZE_EDGES.map(|edge| {
+                        window.insert_hitbox(resize_band_bounds(edge, size), HitboxBehavior::Normal)
+                    })
+                },
+                // One hitbox per edge with its own cursor: GPUI swaps the cursor when the hovered
+                // hitbox changes, so moving the pointer never has to redraw the window.
+                |_bounds, hitboxes, window, _cx| {
+                    for (edge, hitbox) in RESIZE_EDGES.iter().zip(&hitboxes) {
+                        window.set_cursor_style(cursor_for_edge(*edge), hitbox);
                     }
                 },
             )
@@ -56,7 +54,6 @@ pub fn client_frame(content: impl IntoElement, window: &mut Window) -> AnyElemen
         .when(!tiling.bottom, |this| this.pb(RESIZE_BAND))
         .when(!tiling.left, |this| this.pl(RESIZE_BAND))
         .when(!tiling.right, |this| this.pr(RESIZE_BAND))
-        .on_mouse_move(|_, window, _| window.refresh())
         .on_mouse_down(MouseButton::Left, |event, window, _| {
             let size = window.window_bounds().get_bounds().size;
             if let Some(edge) = resize_edge(event.position, size) {
@@ -91,8 +88,6 @@ pub fn client_frame(content: impl IntoElement, window: &mut Window) -> AnyElemen
                         offset: point(px(0.), px(1.)),
                     }])
                 })
-                // Keeps the resize cursor from leaking over the content.
-                .on_mouse_move(|_, _, cx| cx.stop_propagation())
                 .child(content),
         )
         .into_any_element()
@@ -163,6 +158,44 @@ fn window_control_button(id: &'static str, glyph: &'static str, is_close: bool) 
         .child(glyph)
 }
 
+const RESIZE_EDGES: [ResizeEdge; 8] = [
+    ResizeEdge::TopLeft,
+    ResizeEdge::TopRight,
+    ResizeEdge::BottomLeft,
+    ResizeEdge::BottomRight,
+    ResizeEdge::Top,
+    ResizeEdge::Bottom,
+    ResizeEdge::Left,
+    ResizeEdge::Right,
+];
+
+/// The part of the resize band where `resize_edge` answers `edge`.
+fn resize_band_bounds(edge: ResizeEdge, size: Size<Pixels>) -> Bounds<Pixels> {
+    let band = RESIZE_BAND;
+    let inner_width = size.width - band * 2.0;
+    let inner_height = size.height - band * 2.0;
+    let (origin, extent) = match edge {
+        ResizeEdge::TopLeft => (point(px(0.), px(0.)), gpui::size(band, band)),
+        ResizeEdge::TopRight => (point(size.width - band, px(0.)), gpui::size(band, band)),
+        ResizeEdge::BottomLeft => (point(px(0.), size.height - band), gpui::size(band, band)),
+        ResizeEdge::BottomRight => (
+            point(size.width - band, size.height - band),
+            gpui::size(band, band),
+        ),
+        ResizeEdge::Top => (point(band, px(0.)), gpui::size(inner_width, band)),
+        ResizeEdge::Bottom => (
+            point(band, size.height - band),
+            gpui::size(inner_width, band),
+        ),
+        ResizeEdge::Left => (point(px(0.), band), gpui::size(band, inner_height)),
+        ResizeEdge::Right => (
+            point(size.width - band, band),
+            gpui::size(band, inner_height),
+        ),
+    };
+    Bounds::new(origin, extent)
+}
+
 fn resize_edge(position: Point<Pixels>, size: Size<Pixels>) -> Option<ResizeEdge> {
     let near_top = position.y < RESIZE_BAND;
     let near_bottom = position.y > size.height - RESIZE_BAND;
@@ -215,5 +248,17 @@ mod tests {
             Some(ResizeEdge::Right)
         );
         assert_eq!(resize_edge(point(px(400.), px(300.)), window_size), None);
+    }
+
+    #[test]
+    fn each_band_hitbox_matches_its_edge() {
+        let window_size = size(px(800.), px(600.));
+        for edge in RESIZE_EDGES {
+            let band = resize_band_bounds(edge, window_size);
+            let inset = point(px(0.5), px(0.5));
+            for corner in [band.origin + inset, band.bottom_right() - inset] {
+                assert_eq!(resize_edge(corner, window_size), Some(edge), "{edge:?}");
+            }
+        }
     }
 }

@@ -2,6 +2,7 @@
 //! download queue (at most N concurrent engine downloads) and the persisted history.
 //! Rendering lives in `render.rs`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -13,6 +14,7 @@ use gpui::{
 
 use super::demo;
 use super::motion::VinylSpin;
+use super::region::{Region, RegionKind};
 use super::text_input::TextInput;
 use super::theme::{self, Palette};
 use super::thumbnails::{ThumbnailCache, fetch_thumbnail};
@@ -30,7 +32,7 @@ actions!(riptide, [FocusNext, FocusPrevious, AnalyzeLink, Dismiss]);
 const TEXT_INPUT_CONTEXT: &str = "TextInput";
 /// Debug-build test hooks for end-to-end runs without an input device: `RIPTIDE_LINK`
 /// pre-fills the link field; `RIPTIDE_AUTOSTART=1` then analyzes it and queues every track.
-/// Release builds ignore both.
+/// Release builds ignore both (unless built with the `test-hooks` feature).
 const PREFILLED_LINK_ENVIRONMENT_VARIABLE: &str = "RIPTIDE_LINK";
 const AUTOSTART_ENVIRONMENT_VARIABLE: &str = "RIPTIDE_AUTOSTART";
 const HISTORY_THUMBNAILS_PRELOADED: usize = 50;
@@ -229,6 +231,13 @@ impl QueueEntry {
         outcome
     }
 
+    /// The disc turns, the groove catches up with the real progress, or it pulses (converting).
+    fn is_animating(&self, now: Instant) -> bool {
+        self.spin.is_moving(now)
+            || self.shown_fraction != self.fraction
+            || self.state == DownloadState::Converting
+    }
+
     /// Same track in the same format, still queued or running (double-click guard).
     fn is_duplicate_of(&self, track_id: &str, preset: OutputPreset) -> bool {
         !self.is_finished() && self.track.id == track_id && self.preset == preset
@@ -263,6 +272,13 @@ pub struct RiptideApp {
     pub thumbnails: ThumbnailCache,
     pub loading_spin: VinylSpin,
     pub last_frame_at: Instant,
+    /// Phase origin of the looping pulses (tools preparation dot, converting groove).
+    pub pulse_epoch: Instant,
+    regions: HashMap<RegionKind, Entity<Region>>,
+    /// Queue cards built by the last frame; the animation ticker repaints only those.
+    pub visible_queue_card_ids: Vec<u64>,
+    is_animation_ticker_running: bool,
+    has_drawn_since_last_tick: bool,
     pub is_demo: bool,
     pub is_system_dark: bool,
     theme_transition: Option<ThemeTransition>,
@@ -289,7 +305,7 @@ fn is_dark_appearance(appearance: WindowAppearance) -> bool {
 }
 
 fn debug_environment_variable(name: &str) -> Option<String> {
-    if cfg!(debug_assertions) {
+    if cfg!(any(debug_assertions, feature = "test-hooks")) {
         std::env::var(name).ok()
     } else {
         None
@@ -342,6 +358,11 @@ impl RiptideApp {
             thumbnails: ThumbnailCache::default(),
             loading_spin: VinylSpin::at_rest(now),
             last_frame_at: now,
+            pulse_epoch: now,
+            regions: HashMap::new(),
+            visible_queue_card_ids: Vec::new(),
+            is_animation_ticker_running: false,
+            has_drawn_since_last_tick: false,
             is_demo,
             is_system_dark: is_dark_appearance(window.appearance()),
             theme_transition: None,
@@ -823,7 +844,16 @@ impl RiptideApp {
         let Some(entry) = self.entry_mut(id) else {
             return;
         };
+        let is_progress_only = matches!(event, DownloadEvent::Progress { .. });
         let outcome = entry.apply_event(event, Instant::now());
+        if is_progress_only {
+            // A running ticker repaints the card on its next tick. Otherwise wake one frame for
+            // this card only (if on screen); that frame restarts the ticker.
+            if !self.is_animation_ticker_running && self.visible_queue_card_ids.contains(&id) {
+                self.notify_region(RegionKind::QueueCard(id), cx);
+            }
+            return;
+        }
         if let Some(history_entry) = outcome.finished_history_entry {
             store::add_history_entry(&mut self.history, history_entry);
             self.save_history(cx);
@@ -947,6 +977,9 @@ impl RiptideApp {
     pub fn remove_entry(&mut self, id: u64, cx: &mut Context<Self>) {
         self.queue
             .retain(|entry| entry.id != id || !entry.is_finished());
+        if !self.queue.iter().any(|entry| entry.id == id) {
+            self.regions.remove(&RegionKind::QueueCard(id));
+        }
         cx.notify();
     }
 
@@ -997,26 +1030,99 @@ impl RiptideApp {
         }
     }
 
-    /// Advances per-frame animation state; returns true while something still moves.
+    /// Advances per-frame animation state; returns true while a continuous animation (disc,
+    /// progress catch-up, pulse) still moves. The theme cross-fade is reported separately by
+    /// `is_theme_crossfading`.
     pub fn advance_animations(&mut self, now: Instant) -> bool {
         let elapsed = now.saturating_duration_since(self.last_frame_at);
         self.last_frame_at = now;
-        let mut is_animating = self.loading_spin.is_moving(now);
-        if let Some(transition) = &self.theme_transition {
-            if now.saturating_duration_since(transition.started_at)
-                >= theme::THEME_CROSSFADE_DURATION
-            {
-                self.theme_transition = None;
-            } else {
-                is_animating = true;
-            }
+        if self.theme_transition.as_ref().is_some_and(|transition| {
+            now.saturating_duration_since(transition.started_at) >= theme::THEME_CROSSFADE_DURATION
+        }) {
+            self.theme_transition = None;
         }
+        let mut is_animating =
+            self.loading_spin.is_moving(now) || matches!(self.tools, ToolsState::Preparing);
         for entry in &mut self.queue {
             entry.shown_fraction =
                 super::motion::smooth_toward(entry.shown_fraction, entry.fraction, elapsed);
-            is_animating |= entry.spin.is_moving(now) || entry.shown_fraction != entry.fraction;
+            is_animating |= entry.is_animating(now);
         }
         is_animating
+    }
+
+    pub fn is_theme_crossfading(&self) -> bool {
+        self.theme_transition.is_some()
+    }
+
+    /// The cached view drawing `kind`, created on first use.
+    pub fn region(&mut self, kind: RegionKind, cx: &mut Context<Self>) -> Entity<Region> {
+        let app = cx.entity();
+        self.regions
+            .entry(kind)
+            .or_insert_with(|| Region::new(&app, kind, cx))
+            .clone()
+    }
+
+    fn notify_region(&self, kind: RegionKind, cx: &mut Context<Self>) {
+        if let Some(region) = self.regions.get(&kind) {
+            region.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    /// Called by every frame. Keeps continuous animations going at
+    /// `theme::ANIMATION_FRAME_INTERVAL` rather than at the display refresh rate.
+    pub fn note_frame_drawn(&mut self, is_animating: bool, cx: &mut Context<Self>) {
+        self.has_drawn_since_last_tick = true;
+        if !is_animating || self.is_animation_ticker_running {
+            return;
+        }
+        self.is_animation_ticker_running = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(theme::ANIMATION_FRAME_INTERVAL)
+                    .await;
+                let should_continue = this
+                    .update(cx, |app, cx| app.tick_animations(cx))
+                    .unwrap_or(false);
+                if !should_continue {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Repaints the regions that move; returns false (ticker stops) when none does, or when
+    /// no frame was drawn since the previous tick: the window is hidden or minimized, and the
+    /// compositor sends no frames. The next frame restarts the ticker.
+    fn tick_animations(&mut self, cx: &mut Context<Self>) -> bool {
+        let has_drawn = std::mem::take(&mut self.has_drawn_since_last_tick);
+        let now = Instant::now();
+        let mut moving_regions = Vec::new();
+        if self.loading_spin.is_moving(now) {
+            moving_regions.push(RegionKind::FaceA);
+        }
+        if matches!(self.tools, ToolsState::Preparing) {
+            moving_regions.push(RegionKind::ToolsPulse);
+        }
+        moving_regions.extend(
+            self.queue
+                .iter()
+                .filter(|entry| {
+                    entry.is_animating(now) && self.visible_queue_card_ids.contains(&entry.id)
+                })
+                .map(|entry| RegionKind::QueueCard(entry.id)),
+        );
+        if !has_drawn || moving_regions.is_empty() {
+            self.is_animation_ticker_running = false;
+            return false;
+        }
+        for kind in moving_regions {
+            self.notify_region(kind, cx);
+        }
+        true
     }
 
     pub fn set_demo_task(&mut self, task: Task<()>) {

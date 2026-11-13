@@ -6,10 +6,9 @@ use std::ops::Range;
 use std::time::Instant;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Bounds, Context, Decorations, Div, Focusable, FontWeight,
-    MouseButton, ObjectFit, Pixels, Rgba, SharedString, Window, canvas, div, fill, img,
-    linear_color_stop, linear_gradient, point, prelude::*, pulsating_between, px, relative, size,
-    uniform_list,
+    Animation, AnimationExt, AnyElement, Context, Decorations, Div, Entity, Focusable, FontWeight,
+    MouseButton, ObjectFit, Pixels, Rgba, SharedString, StyleRefinement, Window, div, img,
+    linear_color_stop, linear_gradient, prelude::*, pulsating_between, px, relative, uniform_list,
 };
 
 use super::app::{
@@ -21,6 +20,8 @@ use super::components::{
 };
 use super::format;
 use super::motion::spring_progress;
+use super::paper_grain::paper_grain;
+use super::region::{self, Region, RegionKind};
 use super::theme;
 use super::vinyl::vinyl_disc;
 use super::window_frame;
@@ -34,10 +35,17 @@ const FFMPEG_INSTALL_HINT: &str = "Installe ffmpeg : sudo pacman -S ffmpeg";
 impl Render for RiptideApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
-        if self.advance_animations(now) {
+        let is_animating = self.advance_animations(now);
+        if self.is_theme_crossfading() {
+            // The whole window changes color: full-rate frames, for the short cross-fade only.
             window.request_animation_frame();
         }
+        self.note_frame_drawn(is_animating, cx);
+        self.visible_queue_card_ids.clear();
         theme::set_active_palette(self.palette_now(now));
+        let paper_grain = self.region(RegionKind::PaperGrain, cx);
+        let face_a = self.region(RegionKind::FaceA, cx);
+        let tools_pulse = self.region(RegionKind::ToolsPulse, cx);
         let content = div()
             .id("riptide")
             .key_context("Riptide")
@@ -58,9 +66,12 @@ impl Render for RiptideApp {
             .font_family(theme::FONT_BODY)
             .text_size(theme::TEXT_MD)
             .text_color(theme::palette().ink)
-            .child(paper_grain())
+            .child(region::cached(
+                &paper_grain,
+                StyleRefinement::default().absolute().size_full(),
+            ))
             .child(self.render_header(window, cx))
-            .children(self.render_tools_banner(cx))
+            .children(self.render_tools_banner(&tools_pulse, cx))
             .child(
                 div()
                     .flex()
@@ -68,21 +79,13 @@ impl Render for RiptideApp {
                     .min_h_0()
                     .gap(theme::SPACE_5)
                     .px(theme::SPACE_5)
-                    .child(
-                        div()
-                            .id("face-a")
+                    .child(region::cached(
+                        &face_a,
+                        StyleRefinement::default()
                             .flex_1()
                             .min_w_0()
-                            .max_w(theme::LEFT_COLUMN_WIDTH)
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_col()
-                            .gap(theme::SPACE_4)
-                            .py(theme::SPACE_5)
-                            .child(self.render_link_bar(window, cx))
-                            .children(self.render_preview(now, cx))
-                            .child(self.render_output_picker(cx)),
-                    )
+                            .max_w(theme::LEFT_COLUMN_WIDTH),
+                    ))
                     .child(
                         div()
                             .w(theme::BORDER)
@@ -98,41 +101,53 @@ impl Render for RiptideApp {
     }
 }
 
-/// Deterministic specks so the paper has tooth without any image asset.
-fn paper_grain() -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        |bounds: Bounds<Pixels>, _, window, _| {
-            let width = f32::from(bounds.size.width);
-            let height = f32::from(bounds.size.height);
-            let count =
-                (width * height / 10_000.0 * theme::GRAIN_SPECKS_PER_10K_SQUARE_PIXELS) as u32;
-            for index in 0..count {
-                let x = pseudo_random_unit(index * 2) * width;
-                let y = pseudo_random_unit(index * 2 + 1) * height;
-                window.paint_quad(fill(
-                    Bounds::new(
-                        point(bounds.origin.x + px(x), bounds.origin.y + px(y)),
-                        size(theme::GRAIN_SPECK_SIZE, theme::GRAIN_SPECK_SIZE),
-                    ),
-                    theme::palette().grain_speck,
-                ));
-            }
-        },
-    )
-    .absolute()
-    .size_full()
+impl RiptideApp {
+    /// Content of a cached region (see `region.rs`).
+    pub fn render_region(
+        &self,
+        kind: RegionKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let now = Instant::now();
+        match kind {
+            RegionKind::PaperGrain => paper_grain().into_any_element(),
+            RegionKind::FaceA => div()
+                .id("face-a")
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(theme::SPACE_4)
+                .py(theme::SPACE_5)
+                .child(self.render_link_bar(window, cx))
+                .children(self.render_preview(now, cx))
+                .child(self.render_output_picker(cx))
+                .into_any_element(),
+            RegionKind::ToolsPulse => div()
+                .size_full()
+                .rounded_full()
+                .bg(theme::palette().accent)
+                .opacity(pulse_opacity(
+                    self.pulse_epoch,
+                    now,
+                    theme::TOOLS_PULSE_OPACITY,
+                ))
+                .into_any_element(),
+            RegionKind::QueueCard(id) => match self.queue.iter().find(|entry| entry.id == id) {
+                Some(entry) => self.render_queue_card(entry, now, cx).into_any_element(),
+                None => div().into_any_element(),
+            },
+        }
+    }
 }
 
-/// Integer hash (lowbias32) mapped to [0, 1).
-fn pseudo_random_unit(seed: u32) -> f32 {
-    let mut value = seed.wrapping_add(0x9E37_79B9);
-    value ^= value >> 16;
-    value = value.wrapping_mul(0x7FEB_352D);
-    value ^= value >> 15;
-    value = value.wrapping_mul(0x846C_A68B);
-    value ^= value >> 16;
-    (value >> 8) as f32 / (1u32 << 24) as f32
+/// Opacity of a looping pulse at `now`: GPUI's `pulsating_between` curve, but computed per
+/// frame so it follows the throttled animation ticker instead of forcing 60 Hz redraws.
+fn pulse_opacity(epoch: Instant, now: Instant, (minimum, maximum): (f32, f32)) -> f32 {
+    let period = theme::LOADING_PULSE_DURATION.as_secs_f32();
+    let phase = now.saturating_duration_since(epoch).as_secs_f32() % period / period;
+    pulsating_between(minimum, maximum)(phase)
 }
 
 fn muted_text(text: impl Into<SharedString>) -> Div {
@@ -312,7 +327,11 @@ impl RiptideApp {
             }))
     }
 
-    fn render_tools_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_tools_banner(
+        &self,
+        pulse: &Entity<Region>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let banner = |background: Rgba, text_color: Rgba| {
             div()
                 .flex()
@@ -331,15 +350,10 @@ impl RiptideApp {
         match &self.tools {
             ToolsState::Preparing => Some(
                 banner(theme::palette().paper_deep, theme::palette().ink)
-                    .child(
-                        div().size(theme::SPACE_2).rounded_full().bg(theme::palette().accent).with_animation(
-                            "tools-pulse",
-                            Animation::new(theme::LOADING_PULSE_DURATION)
-                                .repeat()
-                                .with_easing(pulsating_between(0.25, 1.0)),
-                            |dot, delta| dot.opacity(delta),
-                        ),
-                    )
+                    .child(region::cached(
+                        pulse,
+                        StyleRefinement::default().flex_none().size(theme::SPACE_2),
+                    ))
                     .child("Préparation de yt-dlp… (premier lancement : téléchargement et vérification)")
                     .into_any_element(),
             ),
@@ -1025,14 +1039,19 @@ impl RiptideApp {
         for url in &visible_thumbnails {
             self.request_thumbnail(url, cx);
         }
-        let now = Instant::now();
-        self.queue[range]
-            .iter()
-            .map(|entry| {
+        let visible_ids: Vec<u64> = self.queue[range].iter().map(|entry| entry.id).collect();
+        self.visible_queue_card_ids.extend(&visible_ids);
+        visible_ids
+            .into_iter()
+            .map(|id| {
+                let card = self.region(RegionKind::QueueCard(id), cx);
                 div()
                     .h(theme::QUEUE_CARD_HEIGHT + theme::QUEUE_ROW_GAP)
                     .pb(theme::QUEUE_ROW_GAP)
-                    .child(self.render_queue_card(entry, now, cx))
+                    .child(region::cached(
+                        &card,
+                        StyleRefinement::default().size_full(),
+                    ))
                     .into_any_element()
             })
             .collect()
@@ -1180,7 +1199,7 @@ impl RiptideApp {
         let enter_duration = theme::CARD_ENTER_DURATION;
         div()
             .relative()
-            .h_full()
+            .size_full()
             .flex()
             .items_center()
             .gap(theme::SPACE_4)
@@ -1229,7 +1248,9 @@ impl RiptideApp {
                             .child(entry.error_message.clone().unwrap_or_default())
                             .into_any_element()
                     } else {
-                        progress_groove(entry).into_any_element()
+                        let converting_opacity =
+                            pulse_opacity(self.pulse_epoch, now, theme::CONVERTING_PULSE_OPACITY);
+                        progress_groove(entry, converting_opacity).into_any_element()
                     })
                     .child(
                         div()
@@ -1295,7 +1316,7 @@ fn media_chip(
         }))
 }
 
-fn progress_groove(entry: &QueueEntry) -> impl IntoElement {
+fn progress_groove(entry: &QueueEntry, converting_opacity: f32) -> impl IntoElement {
     let fraction = match entry.state {
         DownloadState::Done | DownloadState::Converting => 1.0,
         _ => entry.shown_fraction,
@@ -1319,19 +1340,9 @@ fn progress_groove(entry: &QueueEntry) -> impl IntoElement {
         .w(relative(fraction))
         .rounded(theme::RADIUS_PILL)
         .bg(fill_background);
-    let fill_bar: AnyElement = if entry.state == DownloadState::Converting {
-        fill_bar
-            .with_animation(
-                ("converting", entry.id as usize),
-                Animation::new(theme::LOADING_PULSE_DURATION)
-                    .repeat()
-                    .with_easing(pulsating_between(0.45, 1.0)),
-                |bar, delta| bar.opacity(delta),
-            )
-            .into_any_element()
-    } else {
-        fill_bar.into_any_element()
-    };
+    let fill_bar = fill_bar.when(entry.state == DownloadState::Converting, |bar| {
+        bar.opacity(converting_opacity)
+    });
     div()
         .relative()
         .w_full()

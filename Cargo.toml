@@ -17,3 +17,14 @@ ureq = "3.5.2"
 [patch.crates-io]
 # shortcut: xattr 0.2.3 (via gpui 0.2.2) breaks on recent libc; drop when gpui updates its deps.
 xattr = { path = "vendor/xattr" }
+
+[profile.release]
+# Smaller, faster binary: whole-crate-graph inlining across crates and no symbol table.
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[features]
+# Keeps the debug-only test hooks (RIPTIDE_DEMO scenes, RIPTIDE_LINK, RIPTIDE_AUTOSTART) in a
+# release build, to profile with real optimizations: `cargo build --release --features test-hooks`.
+test-hooks = []
