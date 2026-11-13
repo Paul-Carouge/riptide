@@ -14,6 +14,7 @@ Linux desktop app (Rust + GPUI) to download audio/video from YouTube links and p
 - Test: `cargo test`
 - Verify (must pass before any commit): `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
 - Format: `cargo fmt`
+- Profiling build (demo scenes and test hooks in release): `cargo build --release --features test-hooks`
 
 ## Architecture
 - `src/main.rs` — app bootstrap, window, theme.
@@ -37,7 +38,7 @@ Linux desktop app (Rust + GPUI) to download audio/video from YouTube links and p
 
 ## Git
 - `main` stays stable. One branch per task (`feat/…`, `fix/…`), Conventional Commits.
-- Agents may push branches and open PRs on `github.com/Paul-Carouge/riptide` (private). The lead merges after `code-reviewer` approves and verify is green. Never `--force`.
+- Agents may push branches and open PRs on `github.com/Paul-Carouge/riptide` (public). The lead merges after `code-reviewer` approves and verify is green. Never `--force`.
 
 ## Verification
 "Done" = verify passes AND the real window was launched and looked at (screenshot of the running app, e.g. `grim` on Wayland) for every UI change, AND a real download of a short video to MP3 and MP4 succeeds for engine changes.
