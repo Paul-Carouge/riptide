@@ -391,7 +391,7 @@ impl RiptideApp {
                     ))),
             )
             .child(muted_text(
-                "Téléchargeur YouTube pour Linux, en audio ou en vidéo, avec yt-dlp et ffmpeg.",
+                "Téléchargeur YouTube et Suno pour Linux, en audio ou en vidéo, avec yt-dlp et ffmpeg.",
             ))
             .child(
                 div().flex().child(
@@ -415,7 +415,7 @@ impl RiptideApp {
                     .text_color(theme::palette().ink_muted)
                     .child(
                         "Respecte les droits d'auteur : ne télécharge que ce que tu as le droit \
-                         de copier, dans le respect des conditions de YouTube.",
+                         de copier, dans le respect des conditions de YouTube et de Suno.",
                     ),
             )
     }

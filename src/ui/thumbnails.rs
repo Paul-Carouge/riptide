@@ -11,9 +11,12 @@ const MAXIMUM_THUMBNAIL_BYTES: u64 = 4 * 1024 * 1024;
 const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Simultaneous thumbnail requests; the rest wait (newest first, i.e. the rows on screen).
 pub const MAXIMUM_CONCURRENT_THUMBNAIL_REQUESTS: usize = 6;
-/// YouTube's image CDNs. Any other host is refused (the URL comes from yt-dlp's JSON).
+/// YouTube's image CDNs (or a subdomain). Any other host is refused (the URL comes from
+/// yt-dlp's JSON or Suno's clip JSON).
 const ALLOWED_THUMBNAIL_HOST_SUFFIXES: [&str; 3] =
     ["ytimg.com", "ggpht.com", "googleusercontent.com"];
+/// Suno's image CDNs, matched exactly.
+const ALLOWED_THUMBNAIL_EXACT_HOSTS: [&str; 2] = ["cdn1.suno.ai", "cdn2.suno.ai"];
 
 #[derive(Clone)]
 pub enum ThumbnailSlot {
@@ -104,7 +107,8 @@ fn shared_agent() -> &'static ureq::Agent {
     })
 }
 
-/// True for `https://<host>/…` where host is one of YouTube's image CDNs (or a subdomain).
+/// True for `https://<host>/…` where host is one of YouTube's image CDNs (or a subdomain)
+/// or one of Suno's.
 pub fn is_allowed_thumbnail_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
@@ -115,18 +119,20 @@ pub fn is_allowed_thumbnail_url(url: &str) -> bool {
         return false;
     }
     let host = authority.to_ascii_lowercase();
-    ALLOWED_THUMBNAIL_HOST_SUFFIXES.iter().any(|suffix| {
-        host == *suffix
-            || host
-                .strip_suffix(suffix)
-                .is_some_and(|prefix| prefix.ends_with('.'))
-    })
+    ALLOWED_THUMBNAIL_EXACT_HOSTS.contains(&host.as_str())
+        || ALLOWED_THUMBNAIL_HOST_SUFFIXES.iter().any(|suffix| {
+            host == *suffix
+                || host
+                    .strip_suffix(suffix)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
 }
 
-/// Blocking: call from a background task. Only https URLs on YouTube image hosts are fetched.
+/// Blocking: call from a background task. Only https URLs on YouTube or Suno image hosts are
+/// fetched.
 pub fn fetch_thumbnail(url: &str) -> Result<Image, String> {
     if !is_allowed_thumbnail_url(url) {
-        return Err("thumbnail url is not https on a YouTube image host".to_owned());
+        return Err("thumbnail url is not https on a YouTube or Suno image host".to_owned());
     }
     let mut response = shared_agent()
         .get(url)
@@ -192,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn only_youtube_image_hosts_are_allowed() {
+    fn only_youtube_and_suno_image_hosts_are_allowed() {
         assert!(is_allowed_thumbnail_url(
             "https://i.ytimg.com/vi/x/hqdefault.jpg"
         ));
@@ -211,6 +217,14 @@ mod tests {
         assert!(!is_allowed_thumbnail_url("https://i.ytimg.com:8443/x.jpg"));
         assert!(!is_allowed_thumbnail_url("https://example.com/i.ytimg.com"));
         assert!(!is_allowed_thumbnail_url("ftp://i.ytimg.com/x"));
+        assert!(is_allowed_thumbnail_url(
+            "https://cdn2.suno.ai/image_large_e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c.jpeg"
+        ));
+        assert!(!is_allowed_thumbnail_url("https://evil.suno.ai/x.jpeg"));
+        assert!(!is_allowed_thumbnail_url(
+            "https://cdn2.suno.ai.evil.net/x.jpeg"
+        ));
+        assert!(!is_allowed_thumbnail_url("http://cdn2.suno.ai/x.jpeg"));
     }
 
     #[test]

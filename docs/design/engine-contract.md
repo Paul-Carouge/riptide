@@ -9,7 +9,8 @@ pub enum EngineError {
     FfmpegMissing,                  // ffmpeg/ffprobe not on PATH
     ToolDownloadFailed(String),     // network / HTTP error while fetching yt-dlp
     ToolChecksumMismatch,           // SHA-256 of downloaded yt-dlp does not match
-    InvalidUrl(String),             // not http(s) or not a YouTube host
+    InvalidUrl(String),             // not http(s), not a YouTube host, not a Suno song link
+    SunoSongNotDownloadable,        // Suno serves this song only encrypted (non-public song)
     ProbeFailed(String),            // yt-dlp -J failed (private video, removed, geo…)
     DownloadFailed(String),         // yt-dlp/ffmpeg exited non-zero (last stderr line)
     Io(String),
@@ -34,7 +35,8 @@ pub fn install_app_update(release: &AppRelease) -> Result<String /*installed ver
 pub fn restart_app() -> Result<(), EngineError>;                 // spawns the executable again (same argv), detached
 
 // probe.rs
-pub fn validate_youtube_url(input: &str) -> Result<String /*normalized url*/, EngineError>; // pure, unit-tested
+pub fn validate_media_url(input: &str) -> Result<String /*normalized https url*/, EngineError>; // pure, unit-tested
+// YouTube hosts as before; Suno: suno.com, www.suno.com, app.suno.ai with /song/<uuid> or /s/<code>.
 pub enum MediaKind { Single, Playlist }
 pub struct Track {
     pub id: String, pub title: String, pub uploader: Option<String>,
@@ -44,10 +46,10 @@ pub struct ProbedLink {
     pub kind: MediaKind, pub title: String, pub uploader: Option<String>,
     pub thumbnail_url: Option<String>, pub tracks: Vec<Track>,
 }
-pub fn probe_link(url: &str) -> Result<ProbedLink, EngineError>; // yt-dlp -J --flat-playlist
+pub fn probe_link(url: &str) -> Result<ProbedLink, EngineError>; // YouTube: yt-dlp -J --flat-playlist; Suno: see below
 
 // preset.rs
-pub enum AudioFormat { Mp3, M4a, Opus, Flac, Wav }
+pub enum AudioFormat { Mp3, M4a, Opus, Flac, Wav, Ogg } // Ogg = Vorbis, cover embedded
 pub enum AudioQuality { Best, Kbps320, Kbps256, Kbps192, Kbps128 } // ignored for Flac/Wav
 pub enum VideoFormat { Mp4, Webm }
 pub enum VideoQuality { Best, P2160, P1440, P1080, P720, P480 }
@@ -91,11 +93,16 @@ Download file handling:
 - `Finished { output_file }` carries that final path. The working folder (and `.riptide-partial` once empty) is removed on success, failure and cancel.
 - A cancel that lands after yt-dlp reported the finished file yields `Finished` + `Done`, not `Cancelled`.
 - `StateChanged(Converting)` is never sent while paused (resume restores it). Pause/resume/cancel are no-ops once yt-dlp's output has closed.
-- Probe and download pass `--use-extractors "youtube.*"`: only YouTube extractors can run.
+- YouTube probe and download pass `--use-extractors "youtube.*"`: only YouTube extractors can run.
+
+Suno (`src/engine/suno.rs`):
+- yt-dlp refuses suno.com ("will not be supported"), and Suno serves each song's own audio encrypted (`media_urls`, `audio_url` forbidden). The only plain file is the public song's video `https://cdn1.suno.ai/<uuid>.mp4` (AAC audio), listed as `video_url`; non-public (share-link only) songs have none → `SunoSongNotDownloadable`. Riptide never decrypts anything.
+- Probe: a `/s/<code>` link is resolved by reading the `Location` of `https://suno.com/s/<code>` (redirects not followed); then `https://studio-api-prod.suno.com/api/clip/<uuid>` (the public JSON the song page loads) gives title, `display_name` (artist), duration, cover (`cdn1`/`cdn2.suno.ai` only) and `video_url`, accepted only if it is exactly `https://cdn1.suno.ai/<uuid>.mp4`.
+- The Suno `Track.url` is that CDN file. `start_download` writes an info JSON (title, artist, cover, url) in the working folder and runs `yt-dlp --load-info-json <file> --use-extractors generic`: no extractor runs, yt-dlp only fetches the validated file and the cover, then converts and tags as usual. A Suno page URL given to `start_download` is refused.
 
 Self-update:
 - Releases are tags `vX.Y.Z` with two assets, `riptide-x86_64-linux` and `SHA256SUMS` (built by `.github/workflows/release.yml`). Assets must be hosted under `https://github.com/Paul-Carouge/riptide/releases/download/`, else `check_for_app_update` fails.
 - `install_app_update` checks the executable's folder is writable before downloading, verifies the SHA-256 in memory, writes a `0600` temp file next to the executable, makes it `0755` and renames it over `current_exe()`. The running process keeps the old inode; the new version runs after `restart_app`.
 - UI flow: check, show `version` and `notes`, install on confirmation, then `restart_app()` and quit (`cx.quit()`). Until the Settings tab calls the API, `src/engine/mod.rs` carries `#[expect(dead_code)]` / `#[expect(unused_imports)]` on it: remove them when wiring.
 
-Thumbnails: the UI fetches `thumbnail_url` itself (`src/ui/thumbnails.rs`, ureq, https + ytimg hosts only) because GPUI 0.2.2 ships a null HTTP client; the engine does not fetch images.
+Thumbnails: the UI fetches `thumbnail_url` itself (`src/ui/thumbnails.rs`, ureq, https + YouTube image hosts and `cdn1`/`cdn2.suno.ai` only) because GPUI 0.2.2 ships a null HTTP client; the engine does not fetch images.

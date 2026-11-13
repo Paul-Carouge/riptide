@@ -10,6 +10,7 @@ mod error;
 mod partial;
 mod preset;
 mod probe;
+mod suno;
 mod tools;
 
 pub use app_update::{
@@ -19,5 +20,5 @@ pub use download::{DownloadEvent, DownloadHandle, DownloadRequest, DownloadState
 pub use error::EngineError;
 pub use partial::purge_stale_partial_downloads;
 pub use preset::{AudioFormat, AudioQuality, OutputPreset, VideoFormat, VideoQuality};
-pub use probe::{MediaKind, ProbedLink, Track, probe_link, validate_youtube_url};
+pub use probe::{MediaKind, ProbedLink, Track, probe_link, validate_media_url};
 pub use tools::{ToolStatus, ensure_tools, tool_status, update_yt_dlp};

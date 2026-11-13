@@ -2,6 +2,7 @@ use serde::Deserialize;
 
 use super::EngineError;
 use super::error::last_yt_dlp_error_line;
+use super::suno::{ALLOWED_SUNO_PAGE_HOSTS, SunoLink, parse_suno_path, probe_suno_link};
 use super::tools::yt_dlp_command;
 
 const ALLOWED_YOUTUBE_HOSTS: [&str; 7] = [
@@ -17,8 +18,19 @@ const YOUTUBE_VIDEO_ID_LENGTH: usize = 11;
 /// Titles YouTube gives to playlist slots that can no longer be downloaded.
 const UNAVAILABLE_ENTRY_TITLES: [&str; 2] = ["[Private video]", "[Deleted video]"];
 
-/// Checks the input is an http(s) YouTube link and returns it normalized.
-pub fn validate_youtube_url(input: &str) -> Result<String, EngineError> {
+/// Where a validated link points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum MediaSource {
+    YouTube,
+    Suno(SunoLink),
+}
+
+/// Checks the input is an http(s) YouTube or Suno link and returns it normalized (https).
+pub fn validate_media_url(input: &str) -> Result<String, EngineError> {
+    classify_media_url(input).map(|(_, url)| url)
+}
+
+pub(super) fn classify_media_url(input: &str) -> Result<(MediaSource, String), EngineError> {
     let trimmed = input.trim();
     let invalid = |reason: &str| EngineError::InvalidUrl(format!("{reason}: {trimmed}"));
     if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
@@ -48,13 +60,22 @@ pub fn validate_youtube_url(input: &str) -> Result<String, EngineError> {
         None => authority,
     };
     let host = host.to_ascii_lowercase();
+    if ALLOWED_SUNO_PAGE_HOSTS.contains(&host.as_str()) {
+        let link = parse_suno_path(path_and_query)
+            .ok_or_else(|| invalid("not a Suno song link (/song/… or /s/…)"))?;
+        let url = link.normalized_url();
+        return Ok((MediaSource::Suno(link), url));
+    }
     if !ALLOWED_YOUTUBE_HOSTS.contains(&host.as_str()) {
-        return Err(invalid("not a YouTube address"));
+        return Err(invalid("not a YouTube or Suno address"));
     }
     if path_and_query.trim_start_matches('/').is_empty() {
         return Err(invalid("no video or playlist in the link"));
     }
-    Ok(format!("https://{host}{path_and_query}"))
+    Ok((
+        MediaSource::YouTube,
+        format!("https://{host}{path_and_query}"),
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,9 +103,13 @@ pub struct ProbedLink {
     pub tracks: Vec<Track>,
 }
 
-/// Runs `yt-dlp -J --flat-playlist` on a validated url.
+/// YouTube: runs `yt-dlp -J --flat-playlist` on the validated url. Suno: reads the song's
+/// public clip JSON (yt-dlp does not support Suno).
 pub fn probe_link(url: &str) -> Result<ProbedLink, EngineError> {
-    let validated_url = validate_youtube_url(url)?;
+    let validated_url = match classify_media_url(url)? {
+        (MediaSource::Suno(link), _) => return probe_suno_link(&link),
+        (MediaSource::YouTube, url) => url,
+    };
     let output = yt_dlp_command()?
         .args(["-J", "--flat-playlist", "--no-warnings", "--use-extractors"])
         .arg(super::download::YOUTUBE_EXTRACTORS)
@@ -226,7 +251,7 @@ mod tests {
 
     fn assert_valid(input: &str, expected: &str) {
         assert_eq!(
-            validate_youtube_url(input).as_deref(),
+            validate_media_url(input).as_deref(),
             Ok(expected),
             "{input}"
         );
@@ -234,7 +259,7 @@ mod tests {
 
     fn assert_invalid(input: &str) {
         assert!(
-            matches!(validate_youtube_url(input), Err(EngineError::InvalidUrl(_))),
+            matches!(validate_media_url(input), Err(EngineError::InvalidUrl(_))),
             "{input} should be rejected"
         );
     }
@@ -333,6 +358,46 @@ mod tests {
         assert_invalid("https://gaming.youtube.com/watch?v=jNQXAC9IVRw");
         assert_invalid("https://youtube.com@evil.example/watch?v=jNQXAC9IVRw");
         assert_invalid("https://user:pass@www.youtube.com/watch?v=jNQXAC9IVRw");
+    }
+
+    #[test]
+    fn accepts_suno_song_and_short_links() {
+        let song = "https://suno.com/song/e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c";
+        assert_valid(song, song);
+        assert_valid(
+            "http://WWW.Suno.com/song/E0EE9438-9ccc-4c4d-ac5b-d38814c55b6c?sh=abc",
+            song,
+        );
+        assert_valid(
+            "https://app.suno.ai/song/e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c/",
+            song,
+        );
+        assert_valid(
+            "https://suno.com/s/m2J4HaE56D8teUEw",
+            "https://suno.com/s/m2J4HaE56D8teUEw",
+        );
+        assert!(matches!(
+            classify_media_url(song),
+            Ok((MediaSource::Suno(SunoLink::Song(_)), _))
+        ));
+        assert!(matches!(
+            classify_media_url("https://youtu.be/jNQXAC9IVRw"),
+            Ok((MediaSource::YouTube, _))
+        ));
+    }
+
+    #[test]
+    fn rejects_other_suno_pages_and_lookalikes() {
+        assert_invalid("https://suno.com/");
+        assert_invalid("https://suno.com/explore");
+        assert_invalid("https://suno.com/song/not-a-uuid");
+        assert_invalid("https://suno.com/@hepaul");
+        assert_invalid("https://suno.com/s/a%2Fb");
+        assert_invalid("https://suno.ai/song/e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c");
+        assert_invalid("https://cdn1.suno.ai/e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c.mp4");
+        assert_invalid("https://suno.com.evil.example/song/e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c");
+        assert_invalid("https://suno.com@evil.example/song/e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c");
+        assert_invalid("ftp://suno.com/song/e0ee9438-9ccc-4c4d-ac5b-d38814c55b6c");
     }
 
     #[test]

@@ -1060,7 +1060,7 @@ impl RiptideApp {
         if self.queue.is_empty() {
             return empty_state(
                 "Colle un lien pour commencer",
-                "Vidéo, Short ou playlist YouTube : analyse-le, choisis le format, la file se remplit ici.",
+                "Vidéo, Short ou playlist YouTube, ou chanson Suno : analyse-le, choisis le format, la file se remplit ici.",
             )
             .into_any_element();
         }

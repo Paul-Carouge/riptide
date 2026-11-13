@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::EngineError;
 use super::probe::is_youtube_video_id;
+use super::suno::is_suno_uuid;
 
 /// Hidden, so file managers and music players skip in-progress downloads.
 const PARTIAL_DOWNLOADS_DIR_NAME: &str = ".riptide-partial";
@@ -95,7 +96,7 @@ pub(super) fn create_working_folder(
     let partial_root = output_dir.join(PARTIAL_DOWNLOADS_DIR_NAME);
     std::fs::create_dir_all(&partial_root)
         .map_err(|error| EngineError::Io(format!("create temporary folder: {error}")))?;
-    let safe_id = if is_youtube_video_id(track_id) {
+    let safe_id = if is_youtube_video_id(track_id) || is_suno_uuid(track_id) {
         track_id
     } else {
         "video"
