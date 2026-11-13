@@ -352,8 +352,7 @@ impl RiptideApp {
             settings_path,
             history_path,
         } = persisted;
-        let link_input =
-            cx.new(|cx| TextInput::new("Colle un lien YouTube : vidéo, Short ou playlist", cx));
+        let link_input = cx.new(|cx| TextInput::new("Colle un lien YouTube ou Suno", cx));
         window.focus(&link_input.focus_handle(cx));
         let now = Instant::now();
         let is_demo = demo::is_demo_enabled();
@@ -670,7 +669,7 @@ impl RiptideApp {
     pub fn start_analysis(&mut self, cx: &mut Context<Self>) {
         let input = self.link_input.read(cx).content().trim().to_owned();
         if input.is_empty() {
-            self.show_link_error("Colle d'abord un lien YouTube.".to_owned(), cx);
+            self.show_link_error("Colle d'abord un lien YouTube ou Suno.".to_owned(), cx);
             return;
         }
         if self.is_demo {
@@ -678,7 +677,7 @@ impl RiptideApp {
             self.show_preview(demo::playlist(), cx);
             return;
         }
-        let url = match engine::validate_youtube_url(&input) {
+        let url = match engine::validate_media_url(&input) {
             Ok(url) => url,
             Err(error) => {
                 self.show_link_error(error.user_message_fr(), cx);

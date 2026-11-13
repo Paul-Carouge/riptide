@@ -1,0 +1,28 @@
+{
+  "status": "complete",
+  "title": ".sound 9.",
+  "id": "0ee28dcc-929d-410b-a60c-6f5076b46f15",
+  "entity_type": "song_schema",
+  "video_url": "https://cdn1.suno.ai/0ee28dcc-929d-410b-a60c-6f5076b46f15.mp4",
+  "audio_url": "https://studio-api.prod.suno.com/api/forbidden",
+  "media_urls": [
+    {
+      "url": "https://d2lwuy8qc234o3.cloudfront.net/1/clip/0ee28dcc-929d-410b-a60c-6f5076b46f15.m4a",
+      "content_type": "m4a-opus",
+      "delivery": "progressive",
+      "encoding": "1.0.0"
+    }
+  ],
+  "image_url": "https://cdn2.suno.ai/aa392845-06ce-40ad-a2df-3de4b328f1a8.jpeg",
+  "image_large_url": "https://cdn2.suno.ai/aa392845-06ce-40ad-a2df-3de4b328f1a8.jpeg",
+  "major_model_version": "v6",
+  "display_name": ".fujiro.",
+  "handle": "purpspolice",
+  "is_public": true,
+  "display_tags": "lo-fi, 2-step, psychedelic",
+  "metadata": {
+    "tags": "Texture: vinyl crackle, tape saturation, lo-fi hiss, room to",
+    "duration": 116.4,
+    "type": "gen"
+  }
+}

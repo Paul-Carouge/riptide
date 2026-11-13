@@ -7,9 +7,18 @@ pub enum AudioFormat {
     Opus,
     Flac,
     Wav,
+    /// OGG Vorbis.
+    Ogg,
 }
 impl AudioFormat {
-    pub const ALL: [AudioFormat; 5] = [Self::Mp3, Self::M4a, Self::Opus, Self::Flac, Self::Wav];
+    pub const ALL: [AudioFormat; 6] = [
+        Self::Mp3,
+        Self::M4a,
+        Self::Opus,
+        Self::Ogg,
+        Self::Flac,
+        Self::Wav,
+    ];
 }
 
 /// Ignored for lossless formats.
@@ -74,6 +83,7 @@ impl AudioFormat {
             Self::Opus => "OPUS",
             Self::Flac => "FLAC",
             Self::Wav => "WAV",
+            Self::Ogg => "OGG",
         }
     }
 
@@ -85,6 +95,8 @@ impl AudioFormat {
             Self::Opus => "opus",
             Self::Flac => "flac",
             Self::Wav => "wav",
+            // yt-dlp names the codec; the file gets the `.ogg` extension.
+            Self::Ogg => "vorbis",
         }
     }
 
@@ -92,7 +104,7 @@ impl AudioFormat {
         matches!(self, Self::Flac | Self::Wav)
     }
 
-    /// yt-dlp can embed cover art in every audio container except WAV.
+    /// yt-dlp can embed cover art in every audio container except WAV (OGG via mutagen).
     pub(super) fn supports_embedded_cover(self) -> bool {
         self != Self::Wav
     }
@@ -293,6 +305,31 @@ mod tests {
         let best =
             OutputPreset::Audio(AudioFormat::M4a, AudioQuality::Best).yt_dlp_format_arguments();
         assert_eq!(value_after(&best, "--audio-quality"), Some("0"));
+    }
+
+    #[test]
+    fn ogg_is_vorbis_with_a_bitrate_and_a_cover() {
+        let preset = OutputPreset::Audio(AudioFormat::Ogg, AudioQuality::Kbps320);
+        assert_eq!(preset.label_fr(), "OGG · 320 kbps");
+        assert!(!preset.is_lossless());
+        assert!(preset.supports_embedded_cover());
+        let arguments = preset.yt_dlp_format_arguments();
+        assert!(arguments.contains(&"-x".to_string()));
+        assert_eq!(value_after(&arguments, "--audio-format"), Some("vorbis"));
+        assert_eq!(value_after(&arguments, "--audio-quality"), Some("320K"));
+    }
+
+    #[test]
+    fn settings_written_before_ogg_still_load() {
+        let old: OutputPreset = serde_json::from_str(r#"{"Audio":["Opus","Kbps192"]}"#).unwrap();
+        assert_eq!(
+            old,
+            OutputPreset::Audio(AudioFormat::Opus, AudioQuality::Kbps192)
+        );
+        let ogg = OutputPreset::Audio(AudioFormat::Ogg, AudioQuality::Best);
+        let round_trip: OutputPreset =
+            serde_json::from_str(&serde_json::to_string(&ogg).unwrap()).unwrap();
+        assert_eq!(round_trip, ogg);
     }
 
     #[test]

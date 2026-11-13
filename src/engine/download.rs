@@ -12,8 +12,10 @@ use super::error::last_yt_dlp_error_line;
 use super::partial::{
     create_working_folder, move_into_folder_without_overwriting, remove_working_folder,
 };
+use super::probe::{MediaSource, classify_media_url};
+use super::suno::{suno_audio_uuid, yt_dlp_info_json};
 use super::tools::yt_dlp_command;
-use super::{EngineError, OutputPreset, Track, validate_youtube_url};
+use super::{EngineError, OutputPreset, Track};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadRequest {
@@ -65,6 +67,10 @@ const PROGRESS_REPORT_INTERVAL_SECONDS: &str = "0.2";
 /// Only YouTube extractors (`youtube`, `youtube:tab`, …): a URL that slipped past validation
 /// can never reach the generic extractor or another site.
 pub(super) const YOUTUBE_EXTRACTORS: &str = "youtube.*";
+/// Suno downloads load a prepared info JSON, so no extractor runs; should yt-dlp re-extract
+/// its `webpage_url` (the validated CDN file), only the generic extractor may do it.
+const SUNO_EXTRACTORS: &str = "generic";
+const SUNO_INFO_JSON_FILE_NAME: &str = "riptide-suno-info.json";
 const STDERR_LINES_KEPT: usize = 64;
 const PROCESS_GROUP_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const PROCESS_GROUP_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -141,9 +147,32 @@ impl DownloadHandle {
     }
 }
 
+/// What yt-dlp is pointed at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DownloadInput {
+    /// A validated YouTube URL, passed after `--`.
+    YouTubeUrl(String),
+    /// A Suno song: an info JSON written by Riptide around a validated `cdn1.suno.ai` file.
+    InfoJson(PathBuf),
+}
+
+/// Suno tracks carry their validated CDN file as `url`; everything else must be YouTube.
+fn validate_track_url(track: &Track) -> Result<Option<String>, EngineError> {
+    if suno_audio_uuid(&track.url).is_some() {
+        return Ok(None);
+    }
+    match classify_media_url(&track.url)? {
+        (MediaSource::YouTube, url) => Ok(Some(url)),
+        (MediaSource::Suno(_), _) => Err(EngineError::InvalidUrl(format!(
+            "a Suno page must be probed before download: {}",
+            track.url
+        ))),
+    }
+}
+
 /// Spawns yt-dlp now (non-blocking) plus a reader thread that parses progress.
 pub fn start_download(request: DownloadRequest) -> Result<DownloadHandle, EngineError> {
-    let validated_url = validate_youtube_url(&request.track.url)?;
+    let validated_youtube_url = validate_track_url(&request.track)?;
     let io_error =
         |action: &str, error: std::io::Error| EngineError::Io(format!("{action}: {error}"));
     std::fs::create_dir_all(&request.output_dir)
@@ -151,7 +180,20 @@ pub fn start_download(request: DownloadRequest) -> Result<DownloadHandle, Engine
     let output_dir = std::path::absolute(&request.output_dir)
         .map_err(|error| io_error("resolve output folder", error))?;
     let temporary_dir = create_working_folder(&output_dir, &request.track.id)?;
-    let arguments = yt_dlp_download_arguments(&request, &validated_url, &temporary_dir);
+    let input = match validated_youtube_url {
+        Some(url) => DownloadInput::YouTubeUrl(url),
+        None => {
+            let info_json_path = temporary_dir.join(SUNO_INFO_JSON_FILE_NAME);
+            let uuid = suno_audio_uuid(&request.track.url).unwrap_or_default();
+            let info_json = yt_dlp_info_json(&request.track, &request.track.url, uuid);
+            if let Err(error) = std::fs::write(&info_json_path, info_json) {
+                remove_working_folder(&temporary_dir);
+                return Err(io_error("write Suno info file", error));
+            }
+            DownloadInput::InfoJson(info_json_path)
+        }
+    };
+    let arguments = yt_dlp_download_arguments(&request, &input, &temporary_dir);
 
     let spawn_result = yt_dlp_command().and_then(|mut command| {
         command
@@ -243,7 +285,7 @@ pub fn start_download(request: DownloadRequest) -> Result<DownloadHandle, Engine
 
 fn yt_dlp_download_arguments(
     request: &DownloadRequest,
-    validated_url: &str,
+    input: &DownloadInput,
     temporary_dir: &Path,
 ) -> Vec<OsString> {
     // Even the finished file stays in the working folder: Riptide moves it out itself so that
@@ -269,7 +311,10 @@ fn yt_dlp_download_arguments(
         "--print",
         OUTPUT_FILE_PRINT_TEMPLATE,
         "--use-extractors",
-        YOUTUBE_EXTRACTORS,
+        match input {
+            DownloadInput::YouTubeUrl(_) => YOUTUBE_EXTRACTORS,
+            DownloadInput::InfoJson(_) => SUNO_EXTRACTORS,
+        },
         "--windows-filenames",
         "-o",
         OUTPUT_FILE_NAME_TEMPLATE,
@@ -292,8 +337,12 @@ fn yt_dlp_download_arguments(
                 .extend(["--embed-thumbnail", "--convert-thumbnails", "jpg"].map(OsString::from));
         }
     }
-    arguments.push("--".into());
-    arguments.push(validated_url.into());
+    match input {
+        DownloadInput::YouTubeUrl(url) => arguments.extend(["--".into(), url.into()]),
+        DownloadInput::InfoJson(path) => {
+            arguments.extend(["--load-info-json".into(), path.as_os_str().to_owned()])
+        }
+    }
     arguments
 }
 
@@ -689,7 +738,7 @@ mod tests {
         let request = request(preset, embed);
         yt_dlp_download_arguments(
             &request,
-            &request.track.url,
+            &DownloadInput::YouTubeUrl(request.track.url.clone()),
             Path::new("/music/.riptide-partial/x"),
         )
         .into_iter()
@@ -768,5 +817,53 @@ mod tests {
             start_download(bad),
             Err(EngineError::InvalidUrl(_))
         ));
+    }
+
+    #[test]
+    fn suno_tracks_load_an_info_json_with_only_the_generic_extractor() {
+        let mut suno = request(
+            OutputPreset::Audio(AudioFormat::Ogg, AudioQuality::Kbps320),
+            true,
+        );
+        suno.track.url =
+            "https://cdn1.suno.ai/0ee28dcc-929d-410b-a60c-6f5076b46f15.mp4".to_string();
+        assert_eq!(validate_track_url(&suno.track), Ok(None));
+        let arguments: Vec<String> = yt_dlp_download_arguments(
+            &suno,
+            &DownloadInput::InfoJson(PathBuf::from("/music/.riptide-partial/x/info.json")),
+            Path::new("/music/.riptide-partial/x"),
+        )
+        .into_iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+        let length = arguments.len();
+        assert_eq!(arguments[length - 2], "--load-info-json");
+        assert_eq!(arguments[length - 1], "/music/.riptide-partial/x/info.json");
+        assert!(!arguments.contains(&"--".to_string()));
+        let extractors_position = arguments
+            .iter()
+            .position(|argument| argument == "--use-extractors")
+            .unwrap();
+        assert_eq!(arguments[extractors_position + 1], SUNO_EXTRACTORS);
+    }
+
+    #[test]
+    fn suno_pages_and_foreign_cdn_urls_cannot_be_downloaded_directly() {
+        let mut track = request(
+            OutputPreset::Audio(AudioFormat::Mp3, AudioQuality::Best),
+            true,
+        )
+        .track;
+        for url in [
+            "https://suno.com/song/0ee28dcc-929d-410b-a60c-6f5076b46f15",
+            "https://cdn2.suno.ai/0ee28dcc-929d-410b-a60c-6f5076b46f15.mp4",
+            "https://d2lwuy8qc234o3.cloudfront.net/1/clip/0ee28dcc-929d-410b-a60c-6f5076b46f15.m4a",
+        ] {
+            track.url = url.to_string();
+            assert!(
+                matches!(validate_track_url(&track), Err(EngineError::InvalidUrl(_))),
+                "{url}"
+            );
+        }
     }
 }

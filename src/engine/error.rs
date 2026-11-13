@@ -11,6 +11,8 @@ pub enum EngineError {
     InvalidUrl(String),
     #[error("probe failed: {0}")]
     ProbeFailed(String),
+    #[error("Suno serves no public file for this song")]
+    SunoSongNotDownloadable,
     #[error("download failed: {0}")]
     DownloadFailed(String),
     #[error("i/o error: {0}")]
@@ -40,12 +42,19 @@ impl EngineError {
                  (empreinte SHA-256 incorrecte). Il n'a pas été installé."
                     .to_string()
             }
-            Self::InvalidUrl(_) => "Ce lien n'est pas un lien YouTube valide. \
-                 Colle l'adresse d'une vidéo, d'un Short ou d'une playlist YouTube."
+            Self::InvalidUrl(_) => "Ce lien n'est ni un lien YouTube ni un lien Suno valide. \
+                 Colle l'adresse d'une vidéo, d'un Short ou d'une playlist YouTube, \
+                 ou d'une chanson Suno."
                 .to_string(),
+            Self::SunoSongNotDownloadable => {
+                "Cette chanson Suno n'est pas publique : Suno ne la diffuse que chiffrée. \
+                 Si c'est ta création, rends-la publique sur suno.com (Riptide pourra alors \
+                 la télécharger) ou utilise le bouton Télécharger de suno.com."
+                    .to_string()
+            }
             Self::ProbeFailed(detail) => format!(
-                "Impossible de lire ce lien : la vidéo est peut-être privée, supprimée \
-                 ou indisponible dans ton pays. ({detail})"
+                "Impossible de lire ce lien : la vidéo ou la chanson est peut-être privée, \
+                 supprimée ou indisponible dans ton pays. ({detail})"
             ),
             Self::DownloadFailed(detail) => format!("Le téléchargement a échoué. ({detail})"),
             Self::Io(detail) => format!("Erreur de fichier ou de processus : {detail}"),
@@ -118,6 +127,7 @@ mod tests {
             EngineError::ToolChecksumMismatch,
             EngineError::AppUpdateChecksumMismatch,
             EngineError::InvalidUrl("x".into()),
+            EngineError::SunoSongNotDownloadable,
         ] {
             assert!(!error.user_message_fr().is_empty());
         }

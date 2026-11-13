@@ -1,10 +1,11 @@
 # Riptide
 
-Application de bureau Linux pour télécharger l'audio ou la vidéo de liens YouTube : vidéos, Shorts et playlists entières. Riptide est écrit en Rust avec [GPUI](https://www.gpui.rs/) et a une apparence de vinyle rétro, en thème clair ou sombre.
+Application de bureau Linux pour télécharger l'audio ou la vidéo de liens YouTube (vidéos, Shorts et playlists entières) et de chansons Suno. Riptide est écrit en Rust avec [GPUI](https://www.gpui.rs/) et a une apparence de vinyle rétro, en thème clair ou sombre.
 
-- Collez un lien, choisissez les pistes d'une playlist, puis le format : MP3, M4A, OPUS, FLAC ou WAV pour l'audio, MP4 ou WEBM pour la vidéo, avec la qualité voulue.
+- Collez un lien, choisissez les pistes d'une playlist, puis le format : MP3, M4A, OPUS, OGG (Vorbis), FLAC ou WAV pour l'audio, MP4 ou WEBM pour la vidéo, avec la qualité voulue.
 - File de téléchargements en parallèle, avec progression, vitesse, temps restant, pause, reprise et annulation (sans fichiers partiels laissés derrière).
 - Titre, artiste et pochette intégrés aux fichiers.
+- Liens Suno : `suno.com/song/…` et liens de partage `suno.com/s/…`. Seules les chansons publiques sont récupérables : Suno ne diffuse l'audio des autres que chiffré (leur créateur peut les télécharger depuis suno.com).
 - Historique et réglages conservés entre deux lancements.
 - Riptide télécharge lui-même [yt-dlp](https://github.com/yt-dlp/yt-dlp) au premier lancement (empreinte SHA-256 vérifiée) et peut le mettre à jour.
 
@@ -53,7 +54,7 @@ Une version est publiée en poussant un tag `vX.Y.Z` identique à la version de 
 
 ## Usage responsable
 
-Riptide est destiné à un usage personnel. Ne téléchargez que des contenus dont vous avez le droit de faire une copie, et respectez le droit d'auteur ainsi que les [conditions d'utilisation de YouTube](https://www.youtube.com/t/terms). Vous êtes seul responsable de ce que vous téléchargez.
+Riptide est destiné à un usage personnel. Ne téléchargez que des contenus dont vous avez le droit de faire une copie, et respectez le droit d'auteur ainsi que les conditions d'utilisation de [YouTube](https://www.youtube.com/t/terms) et de [Suno](https://suno.com/terms). Vous êtes seul responsable de ce que vous téléchargez.
 
 ## Licences
 
