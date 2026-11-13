@@ -79,6 +79,7 @@ pub fn audio_format_name(format: AudioFormat) -> &'static str {
         AudioFormat::Opus => "OPUS",
         AudioFormat::Flac => "FLAC",
         AudioFormat::Wav => "WAV",
+        AudioFormat::Ogg => "OGG",
     }
 }
 
