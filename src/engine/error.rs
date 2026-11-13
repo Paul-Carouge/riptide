@@ -47,9 +47,9 @@ impl EngineError {
                  ou d'une chanson Suno."
                 .to_string(),
             Self::SunoSongNotDownloadable => {
-                "Suno ne propose pas de fichier public pour cette chanson : son audio n'est \
-                 diffusé que chiffré. Seules les chansons publiques sont récupérables. \
-                 Si c'est ta création, télécharge-la depuis suno.com."
+                "Cette chanson Suno n'est pas publique : Suno ne la diffuse que chiffrée. \
+                 Si c'est ta création, rends-la publique sur suno.com (Riptide pourra alors \
+                 la télécharger) ou utilise le bouton Télécharger de suno.com."
                     .to_string()
             }
             Self::ProbeFailed(detail) => format!(
