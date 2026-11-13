@@ -2,3 +2,4 @@
 .env*
 *.local.*
 .mcp.local.json
+.claude/agent-memory/
