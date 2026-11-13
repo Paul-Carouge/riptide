@@ -1,0 +1,22 @@
+{
+  "url": "https://api.github.com/repos/Paul-Carouge/riptide/releases/1",
+  "html_url": "https://github.com/Paul-Carouge/riptide/releases/tag/v0.2.0",
+  "id": 1,
+  "tag_name": "v0.2.0",
+  "name": "Riptide 0.2.0",
+  "draft": false,
+  "prerelease": false,
+  "body": "- Mise à jour intégrée",
+  "assets": [
+    {
+      "name": "SHA256SUMS",
+      "size": 87,
+      "browser_download_url": "https://github.com/Paul-Carouge/riptide/releases/download/v0.2.0/SHA256SUMS"
+    },
+    {
+      "name": "riptide-x86_64-linux",
+      "size": 31457280,
+      "browser_download_url": "https://github.com/Paul-Carouge/riptide/releases/download/v0.2.0/riptide-x86_64-linux"
+    }
+  ]
+}

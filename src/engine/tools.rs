@@ -29,8 +29,8 @@ const HTTP_USER_AGENT: &str = concat!("riptide/", env!("CARGO_PKG_VERSION"));
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const HTTP_BODY_TIMEOUT: Duration = Duration::from_secs(600);
 /// The standalone binary is ~35 MB; the cap only guards against a runaway response.
-const MAXIMUM_DOWNLOAD_SIZE_IN_BYTES: u64 = 256 * 1024 * 1024;
-const MAXIMUM_API_RESPONSE_SIZE_IN_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const MAXIMUM_DOWNLOAD_SIZE_IN_BYTES: u64 = 256 * 1024 * 1024;
+pub(super) const MAXIMUM_API_RESPONSE_SIZE_IN_BYTES: u64 = 4 * 1024 * 1024;
 /// JavaScript runtimes yt-dlp can use to solve YouTube challenges, in yt-dlp's preference order.
 const SUPPORTED_JAVASCRIPT_RUNTIMES: [&str; 3] = ["deno", "node", "bun"];
 
@@ -159,7 +159,7 @@ fn first_available_javascript_runtime() -> Option<&'static str> {
     })
 }
 
-fn http_agent() -> ureq::Agent {
+pub(super) fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .user_agent(HTTP_USER_AGENT)
         .timeout_connect(Some(HTTP_CONNECT_TIMEOUT))
@@ -173,26 +173,38 @@ fn download_bytes(
     url: &str,
     maximum_size_in_bytes: u64,
 ) -> Result<Vec<u8>, EngineError> {
-    let to_error = |error: ureq::Error| EngineError::ToolDownloadFailed(format!("{url}: {error}"));
-    let mut response = agent.get(url).call().map_err(to_error)?;
-    response
+    fetch_bytes(agent, url, maximum_size_in_bytes)
+        .map_err(|error| EngineError::ToolDownloadFailed(format!("{url}: {error}")))
+}
+
+/// GET with a size cap; HTTP error statuses come back as `ureq::Error::StatusCode`.
+pub(super) fn fetch_bytes(
+    agent: &ureq::Agent,
+    url: &str,
+    maximum_size_in_bytes: u64,
+) -> Result<Vec<u8>, ureq::Error> {
+    agent
+        .get(url)
+        .call()?
         .body_mut()
         .with_config()
         .limit(maximum_size_in_bytes)
         .read_to_vec()
-        .map_err(to_error)
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    assets: Vec<GithubReleaseAsset>,
+pub(super) struct GithubRelease {
+    pub(super) tag_name: String,
+    /// Release notes (Markdown); GitHub sends `null` when empty.
+    #[serde(default)]
+    pub(super) body: Option<String>,
+    pub(super) assets: Vec<GithubReleaseAsset>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubReleaseAsset {
-    name: String,
-    browser_download_url: String,
+pub(super) struct GithubReleaseAsset {
+    pub(super) name: String,
+    pub(super) browser_download_url: String,
 }
 
 impl GithubRelease {
@@ -222,7 +234,10 @@ fn latest_release(agent: &ureq::Agent) -> Result<GithubRelease, EngineError> {
 }
 
 /// Finds the lowercase hex SHA-256 of `file_name` in a `sha256sum`-style listing.
-fn sha256_for_file_in_checksums(checksums_text: &str, file_name: &str) -> Option<String> {
+pub(super) fn sha256_for_file_in_checksums(
+    checksums_text: &str,
+    file_name: &str,
+) -> Option<String> {
     checksums_text.lines().find_map(|line| {
         let (hash, listed_name) = line.trim().split_once(char::is_whitespace)?;
         // `sha256sum` marks binary-mode entries with a leading '*'.
@@ -232,15 +247,14 @@ fn sha256_for_file_in_checksums(checksums_text: &str, file_name: &str) -> Option
     })
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
-/// Checks the hash in memory, then writes a non-executable temp file, makes it executable and
-/// renames it over the old binary, so a crash never leaves a half-written `yt-dlp`.
+/// Checks the hash in memory before anything touches the disk, then installs atomically.
 fn install_verified_binary(
     binary_path: &Path,
     binary_bytes: &[u8],
@@ -249,13 +263,33 @@ fn install_verified_binary(
     if !sha256_hex(binary_bytes).eq_ignore_ascii_case(expected_sha256) {
         return Err(EngineError::ToolChecksumMismatch);
     }
-    let io_error =
-        |action: &str, error: std::io::Error| EngineError::Io(format!("{action}: {error}"));
     let directory = binary_path
         .parent()
         .ok_or_else(|| EngineError::Io(format!("{} has no parent", binary_path.display())))?;
-    fs::create_dir_all(directory).map_err(|error| io_error("create bin directory", error))?;
-    let temporary_path = directory.join(format!(".yt-dlp.download-{}", std::process::id()));
+    fs::create_dir_all(directory)
+        .map_err(|error| EngineError::Io(format!("create bin directory: {error}")))?;
+    install_executable_atomically(binary_path, binary_bytes)
+        .map_err(|error| EngineError::Io(format!("install yt-dlp: {error}")))
+}
+
+/// Writes a non-executable temp file next to `binary_path`, makes it executable (0755) and
+/// renames it over the old binary, so a crash never leaves a half-written executable.
+/// The caller must have verified `binary_bytes` already.
+pub(super) fn install_executable_atomically(
+    binary_path: &Path,
+    binary_bytes: &[u8],
+) -> std::io::Result<()> {
+    let directory = binary_path.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
+    })?;
+    let file_name = binary_path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let temporary_path = directory.join(format!(
+        ".{}.download-{}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
     let write_result = (|| -> std::io::Result<()> {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -268,12 +302,11 @@ fn install_verified_binary(
         fs::set_permissions(&temporary_path, fs::Permissions::from_mode(0o755))?;
         fs::rename(&temporary_path, binary_path)
     })();
-    if let Err(error) = write_result {
+    if write_result.is_err() {
         // Best effort: the temp file is useless and must not be mistaken for the binary.
         let _ = fs::remove_file(&temporary_path);
-        return Err(io_error("install yt-dlp", error));
     }
-    Ok(())
+    write_result
 }
 
 #[cfg(test)]

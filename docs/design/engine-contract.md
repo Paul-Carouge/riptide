@@ -13,6 +13,9 @@ pub enum EngineError {
     ProbeFailed(String),            // yt-dlp -J failed (private video, removed, geo…)
     DownloadFailed(String),         // yt-dlp/ffmpeg exited non-zero (last stderr line)
     Io(String),
+    AppUpdateFailed(String),        // network / GitHub API error during Riptide's self-update
+    AppUpdateChecksumMismatch,      // SHA-256 of the downloaded Riptide does not match SHA256SUMS
+    AppInstallDirectoryNotWritable(String), // executable's folder is read-only (system install)
 }
 impl EngineError { pub fn user_message_fr(&self) -> String } // readable French text for the UI
 
@@ -21,6 +24,14 @@ pub struct ToolStatus { pub yt_dlp_version: Option<String>, pub ffmpeg_available
 pub fn tool_status() -> ToolStatus;                              // fast, no network
 pub fn ensure_tools() -> Result<ToolStatus, EngineError>;        // installs pinned yt-dlp if missing, checks ffmpeg
 pub fn update_yt_dlp() -> Result<String /*new version*/, EngineError>; // latest release, SHA-256 verified
+
+// app_update.rs (self-update from github.com/Paul-Carouge/riptide releases)
+pub const RIPTIDE_VERSION: &str;                                 // Cargo.toml version, e.g. "0.1.0"
+pub struct AppRelease { pub version: String /*"1.2.0"*/, pub notes: String /*Markdown*/,
+                        pub asset_url: String, pub checksums_url: String }
+pub fn check_for_app_update() -> Result<Option<AppRelease>, EngineError>; // Some only if strictly newer; Ok(None) when no release exists
+pub fn install_app_update(release: &AppRelease) -> Result<String /*installed version*/, EngineError>;
+pub fn restart_app() -> Result<(), EngineError>;                 // spawns the executable again (same argv), detached
 
 // probe.rs
 pub fn validate_youtube_url(input: &str) -> Result<String /*normalized url*/, EngineError>; // pure, unit-tested
@@ -81,5 +92,10 @@ Download file handling:
 - A cancel that lands after yt-dlp reported the finished file yields `Finished` + `Done`, not `Cancelled`.
 - `StateChanged(Converting)` is never sent while paused (resume restores it). Pause/resume/cancel are no-ops once yt-dlp's output has closed.
 - Probe and download pass `--use-extractors "youtube.*"`: only YouTube extractors can run.
+
+Self-update:
+- Releases are tags `vX.Y.Z` with two assets, `riptide-x86_64-linux` and `SHA256SUMS` (built by `.github/workflows/release.yml`). Assets must be hosted under `https://github.com/Paul-Carouge/riptide/releases/download/`, else `check_for_app_update` fails.
+- `install_app_update` checks the executable's folder is writable before downloading, verifies the SHA-256 in memory, writes a `0600` temp file next to the executable, makes it `0755` and renames it over `current_exe()`. The running process keeps the old inode; the new version runs after `restart_app`.
+- UI flow: check, show `version` and `notes`, install on confirmation, then `restart_app()` and quit (`cx.quit()`). Until the Settings tab calls the API, `src/engine/mod.rs` carries `#[expect(dead_code)]` / `#[expect(unused_imports)]` on it: remove them when wiring.
 
 Thumbnails: the UI fetches `thumbnail_url` itself (`src/ui/thumbnails.rs`, ureq, https + ytimg hosts only) because GPUI 0.2.2 ships a null HTTP client; the engine does not fetch images.
