@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Riptide
+GenericName=Téléchargeur YouTube
+Comment=Télécharge la musique et les vidéos de liens YouTube
+Exec=riptide
+Icon=riptide
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupWMClass=riptide
