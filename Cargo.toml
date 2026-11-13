@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[patch.crates-io]
+# shortcut: xattr 0.2.3 (via gpui 0.2.2) breaks on recent libc; drop when gpui updates its deps.
+xattr = { path = "vendor/xattr" }
