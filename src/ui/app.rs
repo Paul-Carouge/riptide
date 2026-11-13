@@ -19,8 +19,9 @@ use super::text_input::TextInput;
 use super::theme::{self, Palette};
 use super::thumbnails::{ThumbnailCache, fetch_thumbnail};
 use crate::engine::{
-    self, AudioFormat, AudioQuality, DownloadEvent, DownloadHandle, DownloadRequest, DownloadState,
-    EngineError, OutputPreset, ProbedLink, ToolStatus, Track, VideoFormat, VideoQuality,
+    self, AppRelease, AudioFormat, AudioQuality, DownloadEvent, DownloadHandle, DownloadRequest,
+    DownloadState, EngineError, OutputPreset, ProbedLink, ToolStatus, Track, VideoFormat,
+    VideoQuality,
 };
 use crate::store::{
     self, HistoryEntry, LatestWriteWins, MAXIMUM_CONCURRENT_DOWNLOADS,
@@ -35,6 +36,9 @@ const TEXT_INPUT_CONTEXT: &str = "TextInput";
 /// Release builds ignore both (unless built with the `test-hooks` feature).
 const PREFILLED_LINK_ENVIRONMENT_VARIABLE: &str = "RIPTIDE_LINK";
 const AUTOSTART_ENVIRONMENT_VARIABLE: &str = "RIPTIDE_AUTOSTART";
+/// Test hook: `RIPTIDE_OPEN_SETTINGS=1` starts with the settings panel open (screenshots).
+const OPEN_SETTINGS_ENVIRONMENT_VARIABLE: &str = "RIPTIDE_OPEN_SETTINGS";
+pub const REPOSITORY_URL: &str = "https://github.com/Paul-Carouge/riptide";
 const HISTORY_THUMBNAILS_PRELOADED: usize = 50;
 const INTERRUPTED_DOWNLOAD_MESSAGE: &str = "Le téléchargement s'est interrompu.";
 
@@ -51,6 +55,23 @@ pub enum ToolsState {
     Preparing,
     Ready(ToolStatus),
     Failed(String),
+}
+
+/// Riptide's own update, as shown in the settings panel.
+pub enum AppUpdateState {
+    Idle,
+    /// A check runs (the silent startup one too; only its failure stays hidden).
+    Checking,
+    UpToDate,
+    Available(AppRelease),
+    Installing(AppRelease),
+    Failed(String),
+}
+
+impl AppUpdateState {
+    pub fn is_update_available(&self) -> bool {
+        matches!(self, Self::Available(_) | Self::Installing(_))
+    }
 }
 
 pub enum ProbeState {
@@ -269,6 +290,11 @@ pub struct RiptideApp {
     pub history: Vec<HistoryEntry>,
     pub queue: Vec<QueueEntry>,
     pub active_tab: SidePanelTab,
+    /// The settings panel replaces Face A / Face B while open.
+    pub is_settings_open: bool,
+    /// Bumped on every open/close so the swap animation replays; 0 = no swap yet.
+    pub panel_swap_generation: u64,
+    pub app_update: AppUpdateState,
     pub thumbnails: ThumbnailCache,
     pub loading_spin: VinylSpin,
     pub last_frame_at: Instant,
@@ -355,6 +381,10 @@ impl RiptideApp {
             history,
             queue: Vec::new(),
             active_tab: SidePanelTab::Queue,
+            is_settings_open: debug_environment_variable(OPEN_SETTINGS_ENVIRONMENT_VARIABLE)
+                .is_some_and(|value| value == "1"),
+            panel_swap_generation: 0,
+            app_update: AppUpdateState::Idle,
             thumbnails: ThumbnailCache::default(),
             loading_spin: VinylSpin::at_rest(now),
             last_frame_at: now,
@@ -383,6 +413,7 @@ impl RiptideApp {
                     .update(cx, |input, cx| input.set_content(link, cx));
             }
             app.prepare_tools(cx);
+            app.check_for_app_update(true, cx);
             let history_thumbnails: Vec<String> = app
                 .history
                 .iter()
@@ -540,6 +571,96 @@ impl RiptideApp {
         .detach();
     }
 
+    // ---- Settings panel and self-update -----------------------------------------------
+
+    pub fn set_settings_open(
+        &mut self,
+        is_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_settings_open == is_open {
+            return;
+        }
+        self.is_settings_open = is_open;
+        self.panel_swap_generation += 1;
+        // The link field is not on screen while the panel is open: keep keys on the root.
+        if is_open {
+            window.focus(&self.focus_handle);
+        } else {
+            window.focus(&self.link_input.focus_handle(cx));
+        }
+        cx.notify();
+    }
+
+    /// Asks GitHub for a newer Riptide. The silent startup check shows nothing on failure.
+    pub fn check_for_app_update(&mut self, is_silent: bool, cx: &mut Context<Self>) {
+        if self.is_demo
+            || matches!(
+                self.app_update,
+                AppUpdateState::Checking | AppUpdateState::Installing(_)
+            )
+        {
+            return;
+        }
+        self.app_update = AppUpdateState::Checking;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async { engine::check_for_app_update() })
+                .await;
+            this.update(cx, |app, cx| {
+                app.app_update = match result {
+                    Ok(Some(release)) => AppUpdateState::Available(release),
+                    Ok(None) => AppUpdateState::UpToDate,
+                    Err(error) if is_silent => {
+                        eprintln!("riptide: automatic update check failed: {error}");
+                        AppUpdateState::Idle
+                    }
+                    Err(error) => AppUpdateState::Failed(error.user_message_fr()),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Installs the available release, then starts it and quits this process.
+    pub fn install_app_update(&mut self, cx: &mut Context<Self>) {
+        if self.is_demo {
+            return;
+        }
+        let AppUpdateState::Available(release) = &self.app_update else {
+            return;
+        };
+        let release = release.clone();
+        self.app_update = AppUpdateState::Installing(release.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    engine::install_app_update(&release)?;
+                    engine::restart_app()
+                })
+                .await;
+            this.update(cx, |app, cx| match result {
+                Ok(()) => cx.quit(),
+                Err(error) => {
+                    app.app_update = AppUpdateState::Failed(error.user_message_fr());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn open_repository_page(&self, cx: &mut Context<Self>) {
+        cx.background_spawn(async { run_xdg_open(REPOSITORY_URL.as_ref()) })
+            .detach();
+    }
+
     // ---- Link analysis -----------------------------------------------------------------
 
     pub fn analyze_link(&mut self, _: &AnalyzeLink, _: &mut Window, cx: &mut Context<Self>) {
@@ -616,7 +737,11 @@ impl RiptideApp {
         cx.notify();
     }
 
-    pub fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_settings_open {
+            self.set_settings_open(false, window, cx);
+            return;
+        }
         if self.link_error.take().is_some() {
         } else if !matches!(self.probe, ProbeState::Idle) {
             self.probe = ProbeState::Idle;
@@ -985,21 +1110,13 @@ impl RiptideApp {
 
     pub fn open_folder(&self, path: &Path, cx: &mut Context<Self>) {
         let path = path.to_path_buf();
-        // Argument vector, no shell: the path is passed verbatim to xdg-open.
         cx.background_spawn(async move {
             let directory = if path.is_dir() {
                 path
             } else {
                 path.parent().map(Path::to_path_buf).unwrap_or_default()
             };
-            match std::process::Command::new("xdg-open")
-                .arg(&directory)
-                .status()
-            {
-                Ok(status) if status.success() => {}
-                Ok(status) => eprintln!("riptide: xdg-open exited with {status}"),
-                Err(error) => eprintln!("riptide: cannot run xdg-open: {error}"),
-            }
+            run_xdg_open(directory.as_os_str());
         })
         .detach();
     }
@@ -1101,7 +1218,7 @@ impl RiptideApp {
         let has_drawn = std::mem::take(&mut self.has_drawn_since_last_tick);
         let now = Instant::now();
         let mut moving_regions = Vec::new();
-        if self.loading_spin.is_moving(now) {
+        if self.loading_spin.is_moving(now) && !self.is_settings_open {
             moving_regions.push(RegionKind::FaceA);
         }
         if matches!(self.tools, ToolsState::Preparing) {
@@ -1135,6 +1252,16 @@ impl RiptideApp {
             .filter(|entry| matches!(entry.control, DownloadControl::Demo))
             .map(|entry| entry.id)
             .collect()
+    }
+}
+
+/// Opens a folder or URL with the desktop's default app; blocks, so call it in the background.
+/// Argument vector, no shell: the target is passed verbatim to xdg-open.
+fn run_xdg_open(target: &std::ffi::OsStr) {
+    match std::process::Command::new("xdg-open").arg(target).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("riptide: xdg-open exited with {status}"),
+        Err(error) => eprintln!("riptide: cannot run xdg-open: {error}"),
     }
 }
 

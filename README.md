@@ -37,7 +37,7 @@ cd riptide
 
 ## Mise à jour
 
-Riptide se met à jour lui-même depuis l'onglet Paramètres. Il vérifie l'empreinte SHA-256 de la nouvelle version, remplace son exécutable, puis redémarre. Cela fonctionne quand Riptide est installé dans un dossier où il peut écrire, comme `~/.local/bin`.
+Riptide vérifie au démarrage si une nouvelle version existe (un point orange apparaît alors sur le bouton Paramètres). Dans Paramètres › Mises à jour, « Rechercher une mise à jour » relance la vérification et « Installer et redémarrer » installe la nouvelle version. Il vérifie l'empreinte SHA-256 de la nouvelle version, remplace son exécutable, puis redémarre. Cela fonctionne quand Riptide est installé dans un dossier où il peut écrire, comme `~/.local/bin`.
 
 ## Développement
 

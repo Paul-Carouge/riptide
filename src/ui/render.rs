@@ -8,7 +8,8 @@ use std::time::Instant;
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Decorations, Div, Entity, Focusable, FontWeight,
     MouseButton, ObjectFit, Pixels, Rgba, SharedString, StyleRefinement, Window, div, img,
-    linear_color_stop, linear_gradient, prelude::*, pulsating_between, px, relative, uniform_list,
+    linear_color_stop, linear_gradient, prelude::*, pulsating_between, px, relative, svg,
+    uniform_list,
 };
 
 use super::app::{
@@ -19,6 +20,7 @@ use super::components::{
     ButtonVariant, button, checkbox_row, overline, pill, section_card, section_title, selector_chip,
 };
 use super::format;
+use super::icons;
 use super::motion::spring_progress;
 use super::paper_grain::paper_grain;
 use super::region::{self, Region, RegionKind};
@@ -28,7 +30,7 @@ use super::window_frame;
 use crate::engine::{
     AudioFormat, AudioQuality, DownloadState, MediaKind, VideoFormat, VideoQuality,
 };
-use crate::store::{HistoryEntry, ThemeMode};
+use crate::store::HistoryEntry;
 
 const FFMPEG_INSTALL_HINT: &str = "Installe ffmpeg : sudo pacman -S ffmpeg";
 
@@ -44,8 +46,62 @@ impl Render for RiptideApp {
         self.visible_queue_card_ids.clear();
         theme::set_active_palette(self.palette_now(now));
         let paper_grain = self.region(RegionKind::PaperGrain, cx);
-        let face_a = self.region(RegionKind::FaceA, cx);
         let tools_pulse = self.region(RegionKind::ToolsPulse, cx);
+        let body = if self.is_settings_open {
+            let settings = self.region(RegionKind::Settings, cx);
+            div()
+                .relative()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(region::cached(
+                    &settings,
+                    StyleRefinement::default().size_full(),
+                ))
+        } else {
+            let face_a = self.region(RegionKind::FaceA, cx);
+            div()
+                .relative()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .gap(theme::SPACE_5)
+                .px(theme::SPACE_5)
+                .child(region::cached(
+                    &face_a,
+                    StyleRefinement::default()
+                        .flex_1()
+                        .min_w_0()
+                        .max_w(theme::LEFT_COLUMN_WIDTH),
+                ))
+                .child(
+                    div()
+                        .w(theme::BORDER)
+                        .my(theme::SPACE_5)
+                        .bg(theme::palette().rule),
+                )
+                .child(self.render_side_panel(
+                    window.viewport_size().width < theme::COMPACT_WINDOW_WIDTH,
+                    cx,
+                ))
+        };
+        // No swap animation at startup; afterwards each open/close replays it.
+        let body = if self.panel_swap_generation == 0 {
+            body.into_any_element()
+        } else {
+            let duration = theme::PANEL_SWAP_DURATION;
+            let direction = if self.is_settings_open { 1.0 } else { -1.0 };
+            body.with_animation(
+                ("panel-swap", self.panel_swap_generation as usize),
+                Animation::new(duration),
+                move |body, linear_delta| {
+                    let delta = spring_progress(linear_delta, duration);
+                    body.top(theme::PANEL_SWAP_OFFSET * direction * (1.0 - delta))
+                        .opacity((linear_delta * 2.5).min(1.0))
+                },
+            )
+            .into_any_element()
+        };
         let content = div()
             .id("riptide")
             .key_context("Riptide")
@@ -72,31 +128,7 @@ impl Render for RiptideApp {
             ))
             .child(self.render_header(window, cx))
             .children(self.render_tools_banner(&tools_pulse, cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .gap(theme::SPACE_5)
-                    .px(theme::SPACE_5)
-                    .child(region::cached(
-                        &face_a,
-                        StyleRefinement::default()
-                            .flex_1()
-                            .min_w_0()
-                            .max_w(theme::LEFT_COLUMN_WIDTH),
-                    ))
-                    .child(
-                        div()
-                            .w(theme::BORDER)
-                            .my(theme::SPACE_5)
-                            .bg(theme::palette().rule),
-                    )
-                    .child(self.render_side_panel(
-                        window.viewport_size().width < theme::COMPACT_WINDOW_WIDTH,
-                        cx,
-                    )),
-            );
+            .child(body);
         window_frame::client_frame(content, window)
     }
 }
@@ -124,6 +156,7 @@ impl RiptideApp {
                 .children(self.render_preview(now, cx))
                 .child(self.render_output_picker(cx))
                 .into_any_element(),
+            RegionKind::Settings => self.render_settings_panel(cx).into_any_element(),
             RegionKind::ToolsPulse => div()
                 .size_full()
                 .rounded_full()
@@ -150,14 +183,14 @@ fn pulse_opacity(epoch: Instant, now: Instant, (minimum, maximum): (f32, f32)) -
     pulsating_between(minimum, maximum)(phase)
 }
 
-fn muted_text(text: impl Into<SharedString>) -> Div {
+pub fn muted_text(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(theme::TEXT_SM)
         .text_color(theme::palette().ink_muted)
         .child(text.into())
 }
 
-fn mono_text(text: impl Into<SharedString>) -> Div {
+pub fn mono_text(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(theme::TEXT_XS)
         .font_family(theme::FONT_MONO)
@@ -219,46 +252,8 @@ fn state_pill(state: DownloadState) -> Div {
 
 impl RiptideApp {
     fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (yt_dlp_label, yt_dlp_colors) = match &self.tools {
-            ToolsState::Preparing => (
-                "yt-dlp · préparation…".to_owned(),
-                (theme::palette().paper_deep, theme::palette().ink_muted),
-            ),
-            ToolsState::Ready(status) => match &status.yt_dlp_version {
-                Some(version) => (
-                    format!("yt-dlp {version}"),
-                    (theme::palette().teal_soft, theme::palette().teal),
-                ),
-                None => (
-                    "yt-dlp absent".to_owned(),
-                    (theme::palette().danger_soft, theme::palette().danger),
-                ),
-            },
-            ToolsState::Failed(_) => (
-                "yt-dlp indisponible".to_owned(),
-                (theme::palette().danger_soft, theme::palette().danger),
-            ),
-        };
-        let ffmpeg_pill = match &self.tools {
-            ToolsState::Ready(status) if status.ffmpeg_available => Some(pill(
-                "ffmpeg OK",
-                theme::palette().success_soft,
-                theme::palette().success,
-            )),
-            ToolsState::Ready(_) => Some(pill(
-                "ffmpeg absent",
-                theme::palette().danger_soft,
-                theme::palette().danger,
-            )),
-            _ => None,
-        };
-        let can_update = matches!(self.tools, ToolsState::Ready(_)) && !self.is_updating_yt_dlp;
-        let update_label = if self.is_updating_yt_dlp {
-            "Mise à jour…"
-        } else {
-            // Short: it sits next to the yt-dlp version pill, and the header must fit 800 px.
-            "Mettre à jour"
-        };
+        let is_settings_open = self.is_settings_open;
+        let has_update = self.app_update.is_update_available();
         div()
             .flex()
             .flex_none()
@@ -267,7 +262,6 @@ impl RiptideApp {
             .px(theme::SPACE_5)
             .border_b(theme::BORDER)
             .border_color(theme::palette().rule)
-            .child(vinyl_disc(px(40.), 0.6, None))
             .child(
                 div()
                     .id("title-bar-drag-area")
@@ -277,54 +271,99 @@ impl RiptideApp {
                     .py(theme::SPACE_3)
                     .flex()
                     .items_center()
+                    .gap(theme::SPACE_3)
                     .on_mouse_down(MouseButton::Left, window_frame::on_title_bar_mouse_down)
-                    .whitespace_nowrap()
-                    .font_family(theme::FONT_DISPLAY)
-                    .text_size(theme::TEXT_DISPLAY)
-                    .line_height(relative(1.0))
-                    .text_color(theme::palette().ink)
-                    .child("Riptide"),
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        window_frame::on_title_bar_right_mouse_down,
+                    )
+                    .child(vinyl_disc(px(40.), 0.6, None))
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .font_family(theme::FONT_DISPLAY)
+                            .text_size(theme::TEXT_DISPLAY)
+                            .line_height(relative(1.0))
+                            .text_color(theme::palette().ink)
+                            .child("Riptide"),
+                    ),
             )
-            .child(self.render_theme_selector(cx))
-            .child(pill(yt_dlp_label, yt_dlp_colors.0, yt_dlp_colors.1))
-            .children(ffmpeg_pill)
             .child(
-                button(
-                    "update-yt-dlp",
-                    update_label,
-                    ButtonVariant::Secondary,
-                    can_update,
-                )
-                .when(can_update, |this| {
-                    this.on_click(cx.listener(|app, _, _, cx| app.update_yt_dlp(cx)))
-                }),
+                div()
+                    .id("open-settings")
+                    .tab_index(0)
+                    .relative()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(theme::SPACE_2)
+                    .h(theme::CONTROL_HEIGHT)
+                    .px(theme::SPACE_4)
+                    .rounded(theme::RADIUS_PILL)
+                    .border(theme::FOCUS_RING_WIDTH)
+                    .border_color(if is_settings_open {
+                        theme::palette().ink
+                    } else {
+                        theme::palette().rule_strong
+                    })
+                    .bg(if is_settings_open {
+                        theme::palette().ink
+                    } else {
+                        theme::palette().card
+                    })
+                    .text_color(if is_settings_open {
+                        theme::palette().paper
+                    } else {
+                        theme::palette().ink
+                    })
+                    .text_size(theme::TEXT_SM)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .when(!is_settings_open, |button| {
+                        button.hover(|style| style.bg(theme::palette().card_hover))
+                    })
+                    .focus(|style| style.border_color(theme::palette().focus_ring))
+                    .child(
+                        svg()
+                            .path(icons::SETTINGS)
+                            .size(theme::ICON_SIZE)
+                            .text_color(if is_settings_open {
+                                theme::palette().paper
+                            } else {
+                                theme::palette().ink
+                            }),
+                    )
+                    .child("Paramètres")
+                    .when(has_update, |button| {
+                        button.child(
+                            div()
+                                .absolute()
+                                .top(-theme::SPACE_1 / 2.)
+                                .right(-theme::SPACE_1 / 2.)
+                                .size(theme::BADGE_DOT_SIZE + theme::FOCUS_RING_WIDTH * 2.)
+                                .rounded_full()
+                                .border(theme::FOCUS_RING_WIDTH)
+                                .border_color(theme::palette().paper)
+                                .bg(theme::palette().accent),
+                        )
+                    })
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.set_settings_open(!is_settings_open, window, cx)
+                    })),
             )
             .when(
                 matches!(window.window_decorations(), Decorations::Client { .. }),
-                |this| this.child(window_frame::window_controls(window)),
+                |this| {
+                    this.child(
+                        div()
+                            .w(theme::BORDER)
+                            .h(theme::SPACE_5)
+                            .bg(theme::palette().rule),
+                    )
+                    .child(window_frame::window_controls(window))
+                },
             )
-    }
-
-    /// Auto / Clair / Sombre, as a compact segmented control.
-    fn render_theme_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let current = self.settings.theme_mode;
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(theme::SPACE_1)
-            .children(ThemeMode::ALL.iter().map(|&mode| {
-                let label = match mode {
-                    ThemeMode::Auto => "Auto",
-                    ThemeMode::Light => "Clair",
-                    ThemeMode::Dark => "Sombre",
-                };
-                selector_chip(("theme-mode", mode as usize), label, current == mode)
-                    .h(theme::ICON_BUTTON_SIZE)
-                    .px(theme::SPACE_2)
-                    .text_size(theme::TEXT_XS)
-                    .on_click(cx.listener(move |app, _, _, cx| app.set_theme_mode(mode, cx)))
-            }))
     }
 
     fn render_tools_banner(
@@ -697,7 +736,6 @@ impl RiptideApp {
     }
 
     fn render_output_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let output = self.output;
         let selected_count = match &self.probe {
             ProbeState::Ready(preview) => preview.selected_track_count(),
             _ => 0,
@@ -708,6 +746,39 @@ impl RiptideApp {
         } else {
             "Télécharger".to_owned()
         };
+        section_card()
+            .child(overline("SORTIE"))
+            .child(self.render_output_choice_rows(cx))
+            .child(labelled_row(
+                "DOSSIER",
+                self.render_output_folder_row(cx).into_any_element(),
+            ))
+            .child(self.render_embed_metadata_row(cx))
+            .child(
+                button(
+                    "download",
+                    download_label,
+                    ButtonVariant::Primary,
+                    can_download,
+                )
+                .h(theme::CONTROL_HEIGHT_LARGE)
+                .text_size(theme::TEXT_MD)
+                .when(can_download, |this| {
+                    this.on_click(cx.listener(|app, _, _, cx| app.enqueue_selected_tracks(cx)))
+                }),
+            )
+            .when(!can_download, |card| {
+                card.child(muted_text(match self.probe {
+                    ProbeState::Ready(_) => "Coche au moins une piste.",
+                    _ => "Analyse un lien pour choisir les pistes.",
+                }))
+            })
+    }
+
+    /// Support, format and quality pickers; shared by Face A and the settings panel (both edit
+    /// the same persisted default).
+    pub fn render_output_choice_rows(&self, cx: &mut Context<Self>) -> Div {
+        let output = self.output;
         let chip_row = || div().flex().flex_wrap().gap(theme::SPACE_2);
 
         let media_row = chip_row()
@@ -810,71 +881,82 @@ impl RiptideApp {
             }
         };
 
-        let labelled = |label: &'static str, content: AnyElement| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme::SPACE_2)
-                .child(mono_text(label))
-                .child(content)
-        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::SPACE_3)
+            .child(labelled_row("SUPPORT", media_row.into_any_element()))
+            .child(labelled_row("FORMAT", format_row.into_any_element()))
+            .child(labelled_row("QUALITÉ", quality_row))
+    }
 
-        section_card()
-            .child(overline("SORTIE"))
-            .child(labelled("SUPPORT", media_row.into_any_element()))
-            .child(labelled("FORMAT", format_row.into_any_element()))
-            .child(labelled("QUALITÉ", quality_row))
-            .child(labelled(
-                "DOSSIER",
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(theme::SPACE_3)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(theme::TEXT_SM)
-                            .font_family(theme::FONT_MONO)
-                            .child(self.settings.output_directory.display().to_string()),
-                    )
-                    .child(
-                        button("change-folder", "Changer", ButtonVariant::Secondary, true)
-                            .on_click(cx.listener(|app, _, _, cx| app.choose_output_directory(cx))),
-                    )
-                    .into_any_element(),
-            ))
+    pub fn render_output_folder_row(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(theme::SPACE_3)
             .child(
-                checkbox_row(
-                    "embed-metadata",
-                    div()
-                        .text_size(theme::TEXT_SM)
-                        .child("Intégrer tags et pochette"),
-                    self.settings.embed_metadata_and_cover,
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(theme::TEXT_SM)
+                    .font_family(theme::FONT_MONO)
+                    .child(self.settings.output_directory.display().to_string()),
+            )
+            .child(
+                button("change-folder", "Changer…", ButtonVariant::Secondary, true)
+                    .on_click(cx.listener(|app, _, _, cx| app.choose_output_directory(cx))),
+            )
+    }
+
+    pub fn render_embed_metadata_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        checkbox_row(
+            "embed-metadata",
+            div()
+                .text_size(theme::TEXT_SM)
+                .child("Intégrer tags et pochette"),
+            self.settings.embed_metadata_and_cover,
+        )
+        .ml(-theme::SPACE_2)
+        .on_click(cx.listener(|app, _, _, cx| app.toggle_embed_metadata(cx)))
+    }
+
+    /// − n + stepper for the number of simultaneous downloads.
+    pub fn render_concurrency_stepper(&self, cx: &mut Context<Self>) -> Div {
+        let concurrency = self.settings.clamped_concurrent_downloads();
+        div()
+            .flex()
+            .items_center()
+            .gap(theme::SPACE_1)
+            .child(
+                button(
+                    "concurrency-down",
+                    "−",
+                    ButtonVariant::Quiet,
+                    concurrency > crate::store::MINIMUM_CONCURRENT_DOWNLOADS,
                 )
-                .ml(-theme::SPACE_2)
-                .on_click(cx.listener(|app, _, _, cx| app.toggle_embed_metadata(cx))),
+                .w(theme::ICON_BUTTON_SIZE)
+                .px(px(0.))
+                .on_click(cx.listener(|app, _, _, cx| app.change_concurrency(-1, cx))),
+            )
+            .child(
+                div()
+                    .font_family(theme::FONT_MONO)
+                    .text_size(theme::TEXT_MD)
+                    .child(concurrency.to_string()),
             )
             .child(
                 button(
-                    "download",
-                    download_label,
-                    ButtonVariant::Primary,
-                    can_download,
+                    "concurrency-up",
+                    "+",
+                    ButtonVariant::Quiet,
+                    concurrency < crate::store::MAXIMUM_CONCURRENT_DOWNLOADS,
                 )
-                .h(theme::CONTROL_HEIGHT_LARGE)
-                .text_size(theme::TEXT_MD)
-                .when(can_download, |this| {
-                    this.on_click(cx.listener(|app, _, _, cx| app.enqueue_selected_tracks(cx)))
-                }),
+                .w(theme::ICON_BUTTON_SIZE)
+                .px(px(0.))
+                .on_click(cx.listener(|app, _, _, cx| app.change_concurrency(1, cx))),
             )
-            .when(!can_download, |card| {
-                card.child(muted_text(match self.probe {
-                    ProbeState::Ready(_) => "Coche au moins une piste.",
-                    _ => "Analyse un lien pour choisir les pistes.",
-                }))
-            })
     }
 
     fn render_side_panel(&self, is_compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -917,7 +999,6 @@ impl RiptideApp {
                 }))
         };
         let active = self.active_tab;
-        let concurrency = self.settings.clamped_concurrent_downloads();
         div()
             .flex()
             .flex_col()
@@ -958,38 +1039,7 @@ impl RiptideApp {
                                 .pb(theme::SPACE_1)
                                 // Dropped in a narrow window so the − / + controls stay visible.
                                 .when(!is_compact, |group| group.child(mono_text("SIMULTANÉS")))
-                                .child(
-                                    button(
-                                        "concurrency-down",
-                                        "−",
-                                        ButtonVariant::Quiet,
-                                        concurrency > crate::store::MINIMUM_CONCURRENT_DOWNLOADS,
-                                    )
-                                    .w(theme::ICON_BUTTON_SIZE)
-                                    .px(px(0.))
-                                    .on_click(
-                                        cx.listener(|app, _, _, cx| app.change_concurrency(-1, cx)),
-                                    ),
-                                )
-                                .child(
-                                    div()
-                                        .font_family(theme::FONT_MONO)
-                                        .text_size(theme::TEXT_MD)
-                                        .child(concurrency.to_string()),
-                                )
-                                .child(
-                                    button(
-                                        "concurrency-up",
-                                        "+",
-                                        ButtonVariant::Quiet,
-                                        concurrency < crate::store::MAXIMUM_CONCURRENT_DOWNLOADS,
-                                    )
-                                    .w(theme::ICON_BUTTON_SIZE)
-                                    .px(px(0.))
-                                    .on_click(
-                                        cx.listener(|app, _, _, cx| app.change_concurrency(1, cx)),
-                                    ),
-                                ),
+                                .child(self.render_concurrency_stepper(cx)),
                         )
                     }),
             )
@@ -1293,6 +1343,16 @@ impl RiptideApp {
                 .collect::<Vec<_>>(),
         )
     }
+}
+
+/// A small mono label above its control ("FORMAT", "DOSSIER").
+pub fn labelled_row(label: &'static str, content: AnyElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme::SPACE_2)
+        .child(mono_text(label))
+        .child(content)
 }
 
 fn media_chip(

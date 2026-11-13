@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use gpui::Context;
 
-use super::app::{RiptideApp, ToolsState};
+use super::app::{AppUpdateState, RiptideApp, ToolsState};
 use crate::engine::{
-    AudioFormat, AudioQuality, DownloadEvent, DownloadState, EngineError, MediaKind, OutputPreset,
-    ProbedLink, ToolStatus, Track, VideoFormat, VideoQuality,
+    AppRelease, AudioFormat, AudioQuality, DownloadEvent, DownloadState, EngineError, MediaKind,
+    OutputPreset, ProbedLink, ToolStatus, Track, VideoFormat, VideoQuality,
 };
 
 const DEMO_ENVIRONMENT_VARIABLE: &str = "RIPTIDE_DEMO";
@@ -20,6 +20,8 @@ const DEMO_BYTES_PER_SECOND: u64 = 2_400_000;
 const DEMO_SECONDS_FOR_FULL_TRACK: f32 = 30.0;
 /// 2026-11-13, fixed so screenshots are reproducible.
 const DEMO_HISTORY_TIMESTAMP: u64 = 1_794_571_200;
+
+const DEMO_RELEASE_NOTES: &str = "## Nouveautés\n\n- Panneau Paramètres : thème, téléchargements, mises à jour.\n- Contrôles de fenêtre redessinés.\n- Moins de redessins au repos.\n\n## Corrections\n\n- La file reprend après une coupure réseau.\n- Les titres très longs ne débordent plus des cartes.";
 
 /// Tracks in the `RIPTIDE_DEMO=big` playlist (virtualized list stress test).
 const BIG_PLAYLIST_TRACK_COUNT: usize = 1500;
@@ -111,6 +113,12 @@ pub fn populate(app: &mut RiptideApp, cx: &mut Context<RiptideApp>) {
         ffmpeg_available: true,
     });
     app.settings.output_directory = PathBuf::from("~/Musique/Riptide");
+    app.app_update = AppUpdateState::Available(AppRelease {
+        version: "0.2.0".to_owned(),
+        notes: DEMO_RELEASE_NOTES.to_owned(),
+        asset_url: String::new(),
+        checksums_url: String::new(),
+    });
     let scene = demo_scene();
     if scene == "empty" {
         return;

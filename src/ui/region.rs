@@ -18,6 +18,7 @@ use super::app::RiptideApp;
 pub enum RegionKind {
     PaperGrain,
     FaceA,
+    Settings,
     ToolsPulse,
     QueueCard(u64),
 }

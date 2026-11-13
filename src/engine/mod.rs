@@ -4,11 +4,6 @@
 //! The UI only uses the items re-exported below. All functions may block or take long:
 //! the UI calls them from `cx.background_spawn`, never on the UI thread.
 
-// Remove this `expect` once the Settings tab calls the self-update API.
-#[expect(
-    dead_code,
-    reason = "self-update API is not called by the UI yet (Settings tab)"
-)]
 mod app_update;
 mod download;
 mod error;
@@ -17,7 +12,6 @@ mod preset;
 mod probe;
 mod tools;
 
-#[expect(unused_imports, reason = "the Settings tab will import these")]
 pub use app_update::{
     AppRelease, RIPTIDE_VERSION, check_for_app_update, install_app_update, restart_app,
 };

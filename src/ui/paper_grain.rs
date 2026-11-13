@@ -20,12 +20,15 @@ const GRAIN_TILE_SIZE: f32 = 256.0;
 
 static GRAIN_TILE_SVG: LazyLock<String> = LazyLock::new(grain_tile_svg);
 
-/// The app's asset source: only the generated grain tile.
+/// The app's asset source: the generated grain tile and the line icons (`icons.rs`).
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        Ok((path == GRAIN_TILE_ASSET_PATH).then(|| Cow::Borrowed(GRAIN_TILE_SVG.as_bytes())))
+        if path == GRAIN_TILE_ASSET_PATH {
+            return Ok(Some(Cow::Borrowed(GRAIN_TILE_SVG.as_bytes())));
+        }
+        Ok(super::icons::icon_svg(path).map(|svg| Cow::Owned(svg.into_bytes())))
     }
 
     fn list(&self, _path: &str) -> gpui::Result<Vec<SharedString>> {

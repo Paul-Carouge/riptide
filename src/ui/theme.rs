@@ -56,6 +56,10 @@ pub struct Palette {
     pub vinyl_label: Rgba,
     pub vinyl_label_print: Rgba,
     pub vinyl_spindle: Rgba,
+    /// Thin outer edge of the floating window (sleeve edge, never a cold grey).
+    pub window_edge: Rgba,
+    /// Warm drop shadow of the floating window.
+    pub window_shadow: Rgba,
 }
 
 pub const LIGHT: Palette = Palette {
@@ -90,6 +94,8 @@ pub const LIGHT: Palette = Palette {
     vinyl_label: hex(0xC4541C),
     vinyl_label_print: with_alpha(hex(0xFFF6E5), 0.85),
     vinyl_spindle: hex(0xF3E9D2),
+    window_edge: hex(0xC9B088),
+    window_shadow: with_alpha(hex(0x4A2E18), 0.30),
 };
 
 pub const DARK: Palette = Palette {
@@ -125,6 +131,8 @@ pub const DARK: Palette = Palette {
     vinyl_label: hex(0xC4541C),
     vinyl_label_print: with_alpha(hex(0xFFF6E5), 0.85),
     vinyl_spindle: hex(0x1D1611),
+    window_edge: hex(0x4A3A2D),
+    window_shadow: with_alpha(hex(0x050302), 0.60),
 };
 
 pub const TRANSPARENT: Rgba = Rgba {
@@ -176,6 +184,8 @@ impl Palette {
             vinyl_label: mix(self.vinyl_label, target.vinyl_label),
             vinyl_label_print: mix(self.vinyl_label_print, target.vinyl_label_print),
             vinyl_spindle: mix(self.vinyl_spindle, target.vinyl_spindle),
+            window_edge: mix(self.window_edge, target.window_edge),
+            window_shadow: mix(self.window_shadow, target.window_shadow),
         }
     }
 }
@@ -226,6 +236,15 @@ pub const CONTROL_HEIGHT: Pixels = px(36.);
 pub const CONTROL_HEIGHT_LARGE: Pixels = px(44.);
 pub const ICON_BUTTON_SIZE: Pixels = px(32.);
 pub const CHECKBOX_SIZE: Pixels = px(18.);
+/// Round minimize / maximize / close knobs and their line icons.
+pub const WINDOW_CONTROL_SIZE: Pixels = px(30.);
+pub const WINDOW_CONTROL_ICON_SIZE: Pixels = px(14.);
+pub const ICON_SIZE: Pixels = px(16.);
+/// "Update available" dot on the settings button.
+pub const BADGE_DOT_SIZE: Pixels = px(8.);
+pub const SETTINGS_COLUMN_MIN_WIDTH: Pixels = px(320.);
+pub const SETTINGS_MAX_WIDTH: Pixels = px(980.);
+pub const RELEASE_NOTES_MAX_HEIGHT: Pixels = px(140.);
 pub const THUMBNAIL_PREVIEW_WIDTH: Pixels = px(176.);
 pub const THUMBNAIL_PREVIEW_HEIGHT: Pixels = px(99.);
 pub const TRACK_THUMBNAIL_WIDTH: Pixels = px(48.);
@@ -255,6 +274,9 @@ pub const CARD_ENTER_DURATION: Duration = Duration::from_millis(620);
 pub const CARD_ENTER_OFFSET: Pixels = px(28.);
 pub const PREVIEW_UNFOLD_DURATION: Duration = Duration::from_millis(560);
 pub const PREVIEW_UNFOLD_OFFSET: Pixels = px(-14.);
+/// Settings panel and Face A/B swapping places: spring slide plus fade.
+pub const PANEL_SWAP_DURATION: Duration = Duration::from_millis(520);
+pub const PANEL_SWAP_OFFSET: Pixels = px(18.);
 pub const LOADING_PULSE_DURATION: Duration = Duration::from_millis(1400);
 /// Opacity range of the looping pulses (tools preparation dot, converting groove).
 pub const TOOLS_PULSE_OPACITY: (f32, f32) = (0.25, 1.0);

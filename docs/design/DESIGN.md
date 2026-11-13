@@ -53,10 +53,47 @@ en cours, posée par la vue racine.
 | `danger` / `danger_soft` | `#F2907A` / `#45201A` | 6,1:1 ; 7,1:1 sur carte |
 | `vinyl`, `vinyl_groove`, `vinyl_rim` | `#110D0A`, `#2E2620`, crème 16 % | liseré éclairé qui détache le disque du fond |
 
-Choix du thème : sélecteur **Auto / Clair / Sombre** dans l'en-tête, persisté (`theme_mode`).
+Choix du thème : sélecteur **Auto / Clair / Sombre** dans le panneau Paramètres (section Apparence), persisté (`theme_mode`).
 **Auto** (défaut) suit l'apparence du bureau (`window.appearance()`, observée en direct). Le
 passage d'une palette à l'autre est un fondu de 320 ms (`THEME_CROSSFADE_DURATION`, ease-out
 cubique), calculé par l'animateur comme le reste.
+
+## En-tête et contrôles de fenêtre
+- En-tête épuré : disque + « Riptide » (zone de déplacement : glisser déplace, double clic
+  maximise, clic droit ouvre le menu de fenêtre du bureau), puis à droite le bouton
+  **Paramètres** (icône molette au trait + libellé, pilule ; encre pleine quand le panneau est
+  ouvert ; point orange `BADGE_DOT_SIZE` quand une mise à jour de Riptide existe), un filet, et
+  les contrôles de fenêtre.
+- Contrôles de fenêtre (`ui/window_frame.rs`) : trois boutons ronds façon potards de platine,
+  `WINDOW_CONTROL_SIZE` 30 px, icônes SVG au trait (`ui/icons.rs`, servies par `Assets`,
+  teintées par la palette) de `WINDOW_CONTROL_ICON_SIZE` 14 px. Repos : fond `card`, bord 2 px
+  `rule`, icône `ink_muted`. Survol : `paper_deep` + bord `rule_strong`, icône `ink` ; fermer →
+  fond `accent`, icône crème. Pressé : `rule` (fermer : `accent_hover`). Focus : bord bleu
+  canard. Agrandir ↔ Restaurer change d'icône selon `window.is_maximized()`.
+- Cadre : coins 12 px, bord 1 px `window_edge` (brun papier, jamais gris), double ombre chaude
+  `window_shadow` (contact 2 px + douce 9 px). Fenêtre maximisée ou tuilée : ni coins, ni ombre,
+  ni bord sur les côtés collés. 8 zones de redimensionnement sans redessin au survol.
+
+| Token | Clair | Sombre |
+|---|---|---|
+| `window_edge` | `#C9B088` | `#4A3A2D` |
+| `window_shadow` | `#4A2E18` 30 % | `#050302` 60 % |
+
+## Paramètres
+Le bouton Paramètres remplace Face A / Face B par le panneau « FACE C · RÉGLAGES » (région en
+cache) avec un glissement ressort + fondu (`PANEL_SWAP_DURATION` 520 ms, `PANEL_SWAP_OFFSET`
+18 px) ; « Retour », le même bouton ou Échap le referment. Les bandeaux d'état (préparation de
+yt-dlp, ffmpeg absent) restent au-dessus du corps. Deux colonnes (min. 320 px, repli en une
+seule colonne), cartes pochette :
+- **Apparence** : thème Auto / Clair / Sombre.
+- **Téléchargements** : support, format, qualité, dossier, simultanés (1–8), tags et pochette.
+  Mêmes réglages que la Face A (une seule valeur persistée).
+- **Mises à jour** : Riptide (version, « Rechercher une mise à jour », états recherche / à jour /
+  nouvelle version + notes en texte brut défilantes, `RELEASE_NOTES_MAX_HEIGHT` / erreur,
+  « Installer et redémarrer ») ; yt-dlp (version, « Mettre à jour yt-dlp ») ; ffmpeg
+  (disponible / absent, « Revérifier »). Une vérification silencieuse a lieu au démarrage.
+- **À propos** : version, licence MIT, lien du dépôt (ouvert par `xdg-open`), rappel sur le
+  droit d'auteur.
 
 ## Typographie (embarquée, OFL, `assets/fonts/`)
 - **Young Serif** : titres, wordmark, onglets (serif display « pochette 70s », chiffres elzéviriens).
@@ -95,19 +132,24 @@ Tailles : 12 · 13 · 15 · 18 · 24 · 34 px (`TEXT_XS` → `TEXT_DISPLAY`).
 | `ERROR_SHAKE_DURATION` / `_AMPLITUDE` | 380 ms / 6 px | secousse du message d'erreur du lien |
 | `LOADING_PULSE_DURATION` | 1,4 s | pulsation « Préparation de yt-dlp… », conversion |
 
-Règles : l'angle du disque est intégré analytiquement (indépendant du nombre d'images) ;
-la vue ne demande une image suivante (`request_animation_frame`) que tant qu'un disque bouge ou
-qu'une barre rattrape sa valeur : aucun redessin quand rien ne bouge. Le ressort est calculé dans
+Règles : l'angle du disque est intégré analytiquement (indépendant du nombre d'images).
+Animations continues via un ticker à 30 fps (`ANIMATION_FRAME_INTERVAL`) qui ne repeint que les
+régions en cache qui bougent (`ui/region.rs`) ; aucune image si rien ne bouge ou si la fenêtre
+est masquée ; le fondu de thème reste à pleine cadence. Les parties statiques (grain, Face A,
+panneau Paramètres) sont des vues en cache ; jamais de `window.refresh()` au déplacement de la
+souris ni d'animation GPUI en `repeat()`. Le ressort est calculé dans
 l'animateur (pas en `easing` : GPUI impose un easing dans 0..=1).
 
 ## Accessibilité
 - Tout est atteignable au clavier : Tab / Maj+Tab, Entrée ou Espace sur le contrôle focalisé,
-  Entrée dans le champ = Analyser, Échap = efface l'erreur, puis ferme l'aperçu, puis vide le champ.
+  Entrée dans le champ = Analyser, Échap = ferme le panneau Paramètres s'il est ouvert, sinon
+  efface l'erreur, puis ferme l'aperçu, puis vide le champ.
 - Focus visible : bordure bleu canard 2 px sur tous les contrôles.
 - Les contrôles désactivés sortent de l'ordre de tabulation.
 
-## Mode démo (builds debug uniquement)
+## Mode démo (builds debug ou `--features test-hooks`)
 `RIPTIDE_DEMO=1` (scène complète animée), `=empty` (états vides), `=history` (onglet historique),
 `=big` (playlist de 1500 pistes, toutes en file) : données fictives, aucun appel au moteur, rien
 n'est enregistré. `RIPTIDE_LINK=<url>` pré-remplit le champ et `RIPTIDE_AUTOSTART=1` analyse puis
-met toutes les pistes en file (tests de bout en bout). Les builds release ignorent ces variables.
+met toutes les pistes en file (tests de bout en bout). `RIPTIDE_OPEN_SETTINGS=1` ouvre le
+panneau Paramètres au lancement ; en démo, une fausse version 0.2.0 est « disponible ». Les builds release ignorent ces variables.

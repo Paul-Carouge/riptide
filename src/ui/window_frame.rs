@@ -1,19 +1,22 @@
 //! Client-side window frame: rounded paper window with a soft shadow, resize edges, and the
-//! title-bar behaviors (drag, double-click to maximize, minimize/maximize/close buttons).
+//! title-bar behaviors (drag, double-click to maximize, right-click window menu, and the round
+//! minimize/maximize/close knobs).
 
 use gpui::{
     AnyElement, Bounds, CursorStyle, Decorations, Div, HitboxBehavior, MouseButton, MouseDownEvent,
-    Pixels, Point, ResizeEdge, Size, Stateful, Window, canvas, div, point, prelude::*, px,
+    Pixels, Point, ResizeEdge, Size, Stateful, Window, canvas, div, point, prelude::*, px, svg,
 };
 
-use super::theme;
+use super::{icons, theme};
 
 /// Invisible band around the window where the pointer resizes it; also holds the shadow.
 const RESIZE_BAND: Pixels = px(10.);
 const WINDOW_CORNER_RADIUS: Pixels = px(12.);
-const WINDOW_SHADOW_BLUR: Pixels = px(8.);
-const WINDOW_SHADOW_ALPHA: f32 = 0.35;
-const WINDOW_CONTROL_SIZE: Pixels = px(28.);
+/// Two layers: a tight contact shadow and a wide soft one, both inside `RESIZE_BAND`.
+const WINDOW_CONTACT_SHADOW_BLUR: Pixels = px(2.);
+const WINDOW_SOFT_SHADOW_BLUR: Pixels = px(9.);
+const WINDOW_SOFT_SHADOW_OFFSET: Pixels = px(2.);
+const WINDOW_CONTACT_SHADOW_ALPHA_SCALE: f32 = 0.6;
 
 /// Wraps the app content in the custom frame. With server decorations it is a no-op.
 pub fn client_frame(content: impl IntoElement, window: &mut Window) -> AnyElement {
@@ -65,7 +68,7 @@ pub fn client_frame(content: impl IntoElement, window: &mut Window) -> AnyElemen
                 .size_full()
                 .overflow_hidden()
                 .cursor(CursorStyle::Arrow)
-                .border_color(theme::palette().rule_strong)
+                .border_color(theme::palette().window_edge)
                 .when(!tiling.top, |this| this.border_t(theme::BORDER))
                 .when(!tiling.bottom, |this| this.border_b(theme::BORDER))
                 .when(!tiling.left, |this| this.border_l(theme::BORDER))
@@ -81,12 +84,25 @@ pub fn client_frame(content: impl IntoElement, window: &mut Window) -> AnyElemen
                     this.rounded_br(WINDOW_CORNER_RADIUS)
                 })
                 .when(is_floating, |this| {
-                    this.shadow(vec![gpui::BoxShadow {
-                        color: gpui::hsla(0., 0., 0., WINDOW_SHADOW_ALPHA),
-                        blur_radius: WINDOW_SHADOW_BLUR,
-                        spread_radius: px(0.),
-                        offset: point(px(0.), px(1.)),
-                    }])
+                    let shadow = theme::palette().window_shadow;
+                    let contact = gpui::Rgba {
+                        a: shadow.a * WINDOW_CONTACT_SHADOW_ALPHA_SCALE,
+                        ..shadow
+                    };
+                    this.shadow(vec![
+                        gpui::BoxShadow {
+                            color: contact.into(),
+                            blur_radius: WINDOW_CONTACT_SHADOW_BLUR,
+                            spread_radius: px(0.),
+                            offset: point(px(0.), px(0.)),
+                        },
+                        gpui::BoxShadow {
+                            color: shadow.into(),
+                            blur_radius: WINDOW_SOFT_SHADOW_BLUR,
+                            spread_radius: px(0.),
+                            offset: point(px(0.), WINDOW_SOFT_SHADOW_OFFSET),
+                        },
+                    ])
                 })
                 .child(content),
         )
@@ -102,60 +118,88 @@ pub fn on_title_bar_mouse_down(event: &MouseDownEvent, window: &mut Window, _cx:
     }
 }
 
-/// Minimize / maximize / close buttons, drawn in the app's own style.
+/// Right-click on the title bar: the desktop's own window menu.
+pub fn on_title_bar_right_mouse_down(
+    event: &MouseDownEvent,
+    window: &mut Window,
+    _cx: &mut gpui::App,
+) {
+    window.show_window_menu(event.position);
+}
+
+/// Minimize / maximize-restore / close, as round turntable knobs with line icons.
 pub fn window_controls(window: &Window) -> impl IntoElement {
     let is_maximized = window.is_maximized();
     div()
         .flex()
         .flex_none()
         .items_center()
-        .gap(theme::SPACE_1)
+        .gap(theme::SPACE_2)
         .child(
-            window_control_button("window-minimize", "–", false)
+            window_control_button("window-minimize", icons::MINIMIZE, false)
                 .on_click(|_, window, _| window.minimize_window()),
         )
         .child(
             window_control_button(
                 "window-maximize",
-                if is_maximized { "❐" } else { "□" },
+                if is_maximized {
+                    icons::RESTORE
+                } else {
+                    icons::MAXIMIZE
+                },
                 false,
             )
             .on_click(|_, window, _| window.zoom_window()),
         )
         .child(
-            window_control_button("window-close", "×", true)
+            window_control_button("window-close", icons::CLOSE, true)
                 .on_click(|_, window, _| window.remove_window()),
         )
 }
 
-fn window_control_button(id: &'static str, glyph: &'static str, is_close: bool) -> Stateful<Div> {
-    let hover_background = if is_close {
-        theme::palette().accent
+fn window_control_button(id: &'static str, icon: &'static str, is_close: bool) -> Stateful<Div> {
+    let palette = theme::palette();
+    let (hover_background, hover_border, hover_icon, pressed_background) = if is_close {
+        (
+            palette.accent,
+            palette.accent,
+            palette.on_accent,
+            palette.accent_hover,
+        )
     } else {
-        theme::palette().paper_deep
+        (
+            palette.paper_deep,
+            palette.rule_strong,
+            palette.ink,
+            palette.rule,
+        )
     };
     div()
         .id(id)
+        .group(id)
+        .tab_index(0)
         .flex()
         .flex_none()
         .items_center()
         .justify_center()
-        .size(WINDOW_CONTROL_SIZE)
+        .size(theme::WINDOW_CONTROL_SIZE)
         .rounded(theme::RADIUS_PILL)
-        .text_size(theme::TEXT_MD)
-        .text_color(theme::palette().ink_muted)
+        .border(theme::FOCUS_RING_WIDTH)
+        .border_color(palette.rule)
+        .bg(palette.card)
         .cursor_pointer()
-        .hover(move |style| {
-            let style = style.bg(hover_background);
-            if is_close {
-                style.text_color(theme::palette().on_accent)
-            } else {
-                style.text_color(theme::palette().ink)
-            }
-        })
+        .hover(move |style| style.bg(hover_background).border_color(hover_border))
+        .active(move |style| style.bg(pressed_background))
+        .focus(|style| style.border_color(theme::palette().focus_ring))
         // Stops the title bar underneath from starting a window move.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(glyph)
+        .child(
+            svg()
+                .path(icon)
+                .size(theme::WINDOW_CONTROL_ICON_SIZE)
+                .text_color(palette.ink_muted)
+                .group_hover(id, move |style| style.text_color(hover_icon)),
+        )
 }
 
 const RESIZE_EDGES: [ResizeEdge; 8] = [
