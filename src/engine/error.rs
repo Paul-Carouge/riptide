@@ -15,6 +15,12 @@ pub enum EngineError {
     DownloadFailed(String),
     #[error("i/o error: {0}")]
     Io(String),
+    #[error("Riptide update failed: {0}")]
+    AppUpdateFailed(String),
+    #[error("Riptide update checksum mismatch")]
+    AppUpdateChecksumMismatch,
+    #[error("Riptide install directory is not writable: {0}")]
+    AppInstallDirectoryNotWritable(String),
 }
 
 impl EngineError {
@@ -43,6 +49,19 @@ impl EngineError {
             ),
             Self::DownloadFailed(detail) => format!("Le téléchargement a échoué. ({detail})"),
             Self::Io(detail) => format!("Erreur de fichier ou de processus : {detail}"),
+            Self::AppUpdateFailed(detail) => format!(
+                "Impossible de mettre à jour Riptide. Vérifie ta connexion internet. ({detail})"
+            ),
+            Self::AppUpdateChecksumMismatch => {
+                "La mise à jour téléchargée est corrompue ou a été modifiée \
+                 (empreinte SHA-256 incorrecte). Riptide n'a pas été modifié."
+                    .to_string()
+            }
+            Self::AppInstallDirectoryNotWritable(directory) => format!(
+                "Riptide est installé dans « {directory} », un dossier où il ne peut pas écrire. \
+                 Mets-le à jour par le moyen utilisé pour l'installer, ou réinstalle-le \
+                 dans ~/.local/bin avec le script d'installation."
+            ),
         }
     }
 }
@@ -89,12 +108,15 @@ mod tests {
             EngineError::ProbeFailed(detail.into()),
             EngineError::DownloadFailed(detail.into()),
             EngineError::Io(detail.into()),
+            EngineError::AppUpdateFailed(detail.into()),
+            EngineError::AppInstallDirectoryNotWritable(detail.into()),
         ] {
             assert!(error.user_message_fr().contains(detail), "{error:?}");
         }
         for error in [
             EngineError::FfmpegMissing,
             EngineError::ToolChecksumMismatch,
+            EngineError::AppUpdateChecksumMismatch,
             EngineError::InvalidUrl("x".into()),
         ] {
             assert!(!error.user_message_fr().is_empty());
